@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# video-collage - Create video collages from multiple videos and images
+# Wrapper script for the Bun.js CLI
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUN_PATH="$HOME/.bun/bin/bun"
+
+# Check if bun is available
+if [ ! -x "$BUN_PATH" ]; then
+    echo "Error: Bun is not installed at $BUN_PATH"
+    echo "Install it with: curl -fsSL https://bun.sh/install | bash"
+    exit 1
+fi
+
+# Check if ffmpeg is available
+if ! command -v ffmpeg &> /dev/null; then
+    echo "Error: ffmpeg is not installed"
+    echo "Install it with your package manager (e.g., pacman -S ffmpeg)"
+    exit 1
+fi
+
+# Check if yt-dlp is available (only warn, not required for generate)
+if ! command -v yt-dlp &> /dev/null; then
+    if [[ "$1" == "download" || "$1" == "dl" || "$1" == http* ]]; then
+        echo "Error: yt-dlp is not installed (required for downloading)"
+        echo "Install it with: pip install yt-dlp"
+        exit 1
+    fi
+fi
+
+# Run the CLI
+exec "$BUN_PATH" run "$SCRIPT_DIR/src/index.ts" "$@"
