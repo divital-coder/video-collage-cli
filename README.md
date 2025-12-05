@@ -4,7 +4,7 @@ A terminal-based utility for downloading videos and creating video collages. Per
 
 ## Demo
 
-https://github.com/divital-coder/video-collage-cli/raw/master/assets/demo.mp4
+![Video Collage Demo](assets/demo.gif)
 
 ## Features
 
