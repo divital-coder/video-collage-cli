@@ -36,9 +36,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Media folder (user content)
 media/
 
-# Output videos
+# Output videos (except demo in assets)
 *.mp4
-!assets/*.mp4
+!assets/demo.mp4
 
 # Bun lockfile
 bun.lockb

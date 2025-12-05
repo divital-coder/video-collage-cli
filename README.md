@@ -2,6 +2,10 @@
 
 A terminal-based utility for downloading videos and creating video collages. Perfect for creating animated wallpapers or visual reminders from your favorite content.
 
+## Demo
+
+https://github.com/divital-coder/video-collage-cli/raw/master/assets/demo.mp4
+
 ## Features
 
 - Download videos from YouTube, Twitter, TikTok, and 1000+ sites
