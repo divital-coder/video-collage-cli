@@ -109,6 +109,60 @@ export function calculateGridLayout(
   return positions;
 }
 
+export function calculateCustomLayout(media: MediaItem[], canvasWidth: number, canvasHeight: number, gap: number = 0): CellPosition[] {
+  const verticals = media.filter(item => item.info && item.info.height > item.info.width);
+  const horizontals = media.filter(item => !verticals.includes(item));
+
+  const positions: CellPosition[] = [];
+
+  let currentY = 0;
+
+  // Place verticals stacked vertically on left
+  for (const item of verticals) {
+    if (!item.info) continue;
+    const aspect = item.info.width / item.info.height;
+    const cellHeight = canvasHeight / verticals.length;
+    const cellWidth = cellHeight * aspect;
+    positions.push({
+      x: 0,
+      y: currentY,
+      width: cellWidth,
+      height: cellHeight,
+      mediaIndex: media.indexOf(item),
+    });
+    currentY += cellHeight;
+  }
+
+  // Place horizontals in grid on the right
+  const maxVerticalWidth = verticals.length > 0 ? Math.max(...positions.slice(0, verticals.length).map(p => p.width)) : 0;
+  const remainingX = maxVerticalWidth + gap;
+  const remainingWidth = canvasWidth - remainingX;
+  const numHorizontals = horizontals.length;
+  if (numHorizontals > 0) {
+    const cols = Math.ceil(Math.sqrt(numHorizontals));
+    const rows = Math.ceil(numHorizontals / cols);
+    const cellWidth = Math.floor((remainingWidth - gap * (cols + 1)) / cols);
+    const cellHeight = Math.floor((canvasHeight - gap * (rows + 1)) / rows);
+    let hIndex = 0;
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        if (hIndex >= numHorizontals) break;
+        const item = horizontals[hIndex];
+        positions.push({
+          x: remainingX + gap + col * (cellWidth + gap),
+          y: gap + row * (cellHeight + gap),
+          width: cellWidth,
+          height: cellHeight,
+          mediaIndex: media.indexOf(item),
+        });
+        hIndex++;
+      }
+    }
+  }
+
+  return positions;
+}
+
 export async function generateCollage(config: CollageConfig): Promise<void> {
   const { layout, width, height, duration, fps, output, background = "black", shader, gpu = false } = config;
   let { media } = config;
@@ -146,14 +200,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   if (layout.type === "custom" && layout.positions) {
     positions = layout.positions;
   } else {
-    positions = calculateGridLayout(
-      media.length,
-      width,
-      height,
-      layout.columns,
-      layout.rows,
-      layout.gap
-    );
+    positions = calculateCustomLayout(media, width, height, layout.gap || 0);
   }
 
   // Build FFmpeg filter complex
@@ -161,10 +208,15 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   const filterParts: string[] = [];
   const overlayChain: string[] = [];
 
-  // Disable loop for videos to avoid FFmpeg issues
+  // Set loop and info for videos
   for (const item of media) {
-    if (item.type === "video") {
-      item.loop = false;
+    if (item.path.startsWith('temp_collage_')) {
+      item.loop = true; // Loop temp collages in final
+      item.info = await getMediaInfo(item.path);
+    } else if (item.type === "video") {
+      const info = await getMediaInfo(item.path);
+      item.loop = info.duration < duration; // Loop short videos
+      item.info = info;
     }
   }
 
@@ -185,13 +237,14 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     if (item.type === "image") {
       // For images: loop for duration
       filterParts.push(
-        `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:force_original_aspect_ratio=decrease,pad=${pos.width}:${pos.height}:(ow-iw)/2:(oh-ih)/2:color=${background},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
+        `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:force_original_aspect_ratio=increase,crop=${pos.width}:${pos.height},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
       );
     } else {
-      // For videos: loop if needed, scale to fit cell
+      // For videos: loop if needed, scale based on orientation
       const loopFilter = item.loop !== false ? `loop=loop=-1:size=10000:start=0,` : "";
+      const scaleFilter = `scale=${pos.width}:${pos.height}:force_original_aspect_ratio=increase,crop=${pos.width}:${pos.height}`;
       filterParts.push(
-        `${inputLabel}${loopFilter}setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:force_original_aspect_ratio=decrease,pad=${pos.width}:${pos.height}:(ow-iw)/2:(oh-ih)/2:color=${background},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
+        `${inputLabel}${loopFilter}${scaleFilter},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
       );
     }
   }

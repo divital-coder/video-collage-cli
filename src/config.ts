@@ -9,7 +9,7 @@ const DEFAULT_CONFIG: Partial<CollageConfig> = {
   background: "black",
   layout: {
     type: "grid",
-    gap: 4,
+    gap: 0,
   },
 };
 

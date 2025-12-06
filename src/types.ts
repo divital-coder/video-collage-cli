@@ -3,6 +3,7 @@ export interface MediaItem {
   type: "video" | "image";
   duration?: number; // For images, how long to display (seconds)
   loop?: boolean; // Whether to loop videos
+  info?: MediaInfo; // Media info for scaling decisions
 }
 
 export interface CollageConfig {

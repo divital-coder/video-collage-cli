@@ -123,7 +123,7 @@ async function runGenerate(args: string[]) {
       fps: { type: "string", short: "f", default: "30" },
       columns: { type: "string" },
       rows: { type: "string" },
-      gap: { type: "string", default: "4" },
+       gap: { type: "string", default: "0" },
        bg: { type: "string", default: "black" },
        shader: { type: "string", short: "s" },
        gpu: { type: "boolean" },
