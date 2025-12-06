@@ -47,14 +47,19 @@ OPTIONS:
   -h, --height <pixels>   Output height (default: 1080)
   -t, --duration <secs>   Output duration in seconds (default: 60)
   -f, --fps <rate>        Frames per second (default: 30)
-  --columns <n>           Grid columns (auto-calculated if not set)
-  --rows <n>              Grid rows (auto-calculated if not set)
-  --gap <pixels>          Gap between cells (default: 4)
+  --layout <type>         Layout type: dynamic (default) or grid
+  --columns <n>           Grid columns (only for grid layout)
+  --rows <n>              Grid rows (only for grid layout)
+  --gap <pixels>          Gap between cells (default: 0)
    --bg <color>            Background color (default: black)
    --shader <name>         Apply shader effect to output
    --gpu                   Use GPU encoding (default: false)
    --init                  Generate sample config file
    --help                  Show this help
+
+LAYOUTS:
+  dynamic     - Dynamic layout that preserves video aspect ratios (no gaps)
+  grid        - Traditional grid with uniform cell sizes
 
 SHADERS:
   vignette    - Darkens edges of the frame
@@ -123,12 +128,13 @@ async function runGenerate(args: string[]) {
       fps: { type: "string", short: "f", default: "30" },
       columns: { type: "string" },
       rows: { type: "string" },
-       gap: { type: "string", default: "0" },
-       bg: { type: "string", default: "black" },
-       shader: { type: "string", short: "s" },
-       gpu: { type: "boolean" },
-       init: { type: "boolean" },
-       help: { type: "boolean" },
+      layout: { type: "string", short: "l", default: "dynamic" },
+      gap: { type: "string", default: "0" },
+      bg: { type: "string", default: "black" },
+      shader: { type: "string", short: "s" },
+      gpu: { type: "boolean" },
+      init: { type: "boolean" },
+      help: { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -189,6 +195,9 @@ async function runGenerate(args: string[]) {
       process.exit(1);
     }
 
+    // Determine layout type
+    const layoutType = values.layout === "grid" ? "grid" : "dynamic";
+
     config = {
       output: values.output!,
       width: parseInt(values.width!, 10),
@@ -199,7 +208,7 @@ async function runGenerate(args: string[]) {
       shader: values.shader,
       gpu: values.gpu || false,
       layout: {
-        type: "grid",
+        type: layoutType as "grid" | "dynamic",
         columns: values.columns ? parseInt(values.columns, 10) : undefined,
         rows: values.rows ? parseInt(values.rows, 10) : undefined,
         gap: parseInt(values.gap!, 10),

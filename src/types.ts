@@ -22,7 +22,7 @@ export interface CollageConfig {
 export type ShaderType = "vignette" | "bloom" | "chromatic" | "noise" | "crt" | "dreamy";
 
 export interface LayoutConfig {
-  type: "grid" | "custom";
+  type: "grid" | "custom" | "dynamic";
   columns?: number;
   rows?: number;
   gap?: number;

@@ -29,7 +29,7 @@ export function getShaderFilter(shader: ShaderType, width: number, height: numbe
 
     case "crt":
       // CRT effect: scanlines + vignette + slight blur
-      return `format=rgb24,split[a][b];[a]curves=all='0/0.05 0.5/0.5 1/0.95'[c];[b]scale=${width}:${height*2}:flags=neighbor,scale=${width}:${height}:flags=neighbor[scan];[c][scan]blend=all_mode=multiply:all_opacity=0.15,vignette=PI/3:0.4,noise=alls=8:allf=t`;
+      return `format=rgb24,split[a][b];[a]curves=all='0/0.05 0.5/0.5 1/0.95'[c];[b]scale=${width}:${height * 2}:flags=neighbor,scale=${width}:${height}:flags=neighbor[scan];[c][scan]blend=all_mode=multiply:all_opacity=0.15,vignette=PI/3:0.4,noise=alls=8:allf=t`;
 
     case "dreamy":
       // Dreamy soft glow with desaturation
@@ -109,58 +109,182 @@ export function calculateGridLayout(
   return positions;
 }
 
-export function calculateCustomLayout(media: MediaItem[], canvasWidth: number, canvasHeight: number, gap: number = 0): CellPosition[] {
-  const verticals = media.filter(item => item.info && item.info.height > item.info.width);
-  const horizontals = media.filter(item => !verticals.includes(item));
-
+/**
+ * Dynamic bin-packing layout that respects video aspect ratios.
+ * Uses a row-based packing approach where each row adapts to fit videos
+ * with their original proportions, eliminating black borders.
+ */
+export function calculateDynamicLayout(
+  media: MediaItem[],
+  canvasWidth: number,
+  canvasHeight: number,
+  gap: number = 0
+): CellPosition[] {
   const positions: CellPosition[] = [];
+
+  // Get media with valid info, preserving original indices
+  const mediaWithInfo = media
+    .map((item, index) => ({ item, index, aspect: item.info ? item.info.width / item.info.height : 16 / 9 }))
+    .filter(m => m.item.info || m.item.type === 'image');
+
+  if (mediaWithInfo.length === 0) {
+    return calculateGridLayout(media.length, canvasWidth, canvasHeight, undefined, undefined, gap);
+  }
+
+  // Calculate optimal row distribution
+  const rows = calculateOptimalRows(mediaWithInfo, canvasWidth, canvasHeight, gap);
 
   let currentY = 0;
 
-  // Place verticals stacked vertically on left
-  for (const item of verticals) {
-    if (!item.info) continue;
-    const aspect = item.info.width / item.info.height;
-    const cellHeight = canvasHeight / verticals.length;
-    const cellWidth = cellHeight * aspect;
-    positions.push({
-      x: 0,
-      y: currentY,
-      width: cellWidth,
-      height: cellHeight,
-      mediaIndex: media.indexOf(item),
-    });
-    currentY += cellHeight;
+  for (const row of rows) {
+    if (row.items.length === 0) continue;
+
+    // Calculate row height based on available width and total aspect ratios
+    const totalGaps = gap * (row.items.length - 1);
+    const availableWidth = canvasWidth - totalGaps;
+
+    // Sum of aspect ratios in this row
+    const totalAspect = row.items.reduce((sum, item) => sum + item.aspect, 0);
+
+    // Row height that makes all items fit perfectly side by side
+    const rowHeight = Math.min(availableWidth / totalAspect, row.maxHeight);
+
+    let currentX = 0;
+
+    for (const item of row.items) {
+      const cellWidth = Math.floor(rowHeight * item.aspect);
+      const cellHeight = Math.floor(rowHeight);
+
+      positions.push({
+        x: Math.floor(currentX),
+        y: Math.floor(currentY),
+        width: cellWidth,
+        height: cellHeight,
+        mediaIndex: item.index,
+      });
+
+      currentX += cellWidth + gap;
+    }
+
+    currentY += rowHeight + gap;
   }
 
-  // Place horizontals in grid on the right
-  const maxVerticalWidth = verticals.length > 0 ? Math.max(...positions.slice(0, verticals.length).map(p => p.width)) : 0;
-  const remainingX = maxVerticalWidth + gap;
-  const remainingWidth = canvasWidth - remainingX;
-  const numHorizontals = horizontals.length;
-  if (numHorizontals > 0) {
-    const cols = Math.ceil(Math.sqrt(numHorizontals));
-    const rows = Math.ceil(numHorizontals / cols);
-    const cellWidth = Math.floor((remainingWidth - gap * (cols + 1)) / cols);
-    const cellHeight = Math.floor((canvasHeight - gap * (rows + 1)) / rows);
-    let hIndex = 0;
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        if (hIndex >= numHorizontals) break;
-        const item = horizontals[hIndex];
-        positions.push({
-          x: remainingX + gap + col * (cellWidth + gap),
-          y: gap + row * (cellHeight + gap),
-          width: cellWidth,
-          height: cellHeight,
-          mediaIndex: media.indexOf(item),
-        });
-        hIndex++;
+  // Scale positions to fill canvas while maintaining relative layout
+  return scalePositionsToFitCanvas(positions, canvasWidth, canvasHeight, gap);
+}
+
+interface RowItem {
+  item: MediaItem;
+  index: number;
+  aspect: number;
+}
+
+interface Row {
+  items: RowItem[];
+  maxHeight: number;
+}
+
+/**
+ * Calculate optimal row distribution for packing media items.
+ * Uses a greedy algorithm that tries to balance row heights.
+ */
+function calculateOptimalRows(
+  mediaWithInfo: RowItem[],
+  canvasWidth: number,
+  canvasHeight: number,
+  gap: number
+): Row[] {
+  // Sort by aspect ratio to group similar items (wide with wide, tall with tall)
+  const sorted = [...mediaWithInfo].sort((a, b) => b.aspect - a.aspect);
+
+  const rows: Row[] = [];
+  let remaining = [...sorted];
+
+  // Target row height for initial distribution
+  const numRows = Math.ceil(Math.sqrt(mediaWithInfo.length * (canvasHeight / canvasWidth)));
+  const targetRowHeight = (canvasHeight - gap * (numRows - 1)) / numRows;
+
+  while (remaining.length > 0) {
+    const row: RowItem[] = [];
+    let rowAspectSum = 0;
+
+    // Fill row until adding more would exceed canvas width at target height
+    while (remaining.length > 0) {
+      const candidate = remaining[0];
+      if (!candidate) break;
+
+      const newAspectSum = rowAspectSum + candidate.aspect;
+      const testRowWidth = targetRowHeight * newAspectSum + gap * row.length;
+
+      if (row.length > 0 && testRowWidth > canvasWidth) {
+        break;
       }
+
+      row.push(candidate);
+      rowAspectSum = newAspectSum;
+      remaining.shift();
+    }
+
+    if (row.length > 0) {
+      rows.push({ items: row, maxHeight: targetRowHeight });
     }
   }
 
-  return positions;
+  // Rebalance rows if needed (if last row has very few items)
+  const lastRow = rows[rows.length - 1];
+  const prevRow = rows[rows.length - 2];
+  if (rows.length > 1 && lastRow && prevRow && lastRow.items.length === 1 && prevRow.items.length > 2) {
+    // Move one item from previous row to last row
+    const moved = prevRow.items.pop();
+    if (moved) {
+      lastRow.items.unshift(moved);
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * Scale all positions proportionally to fill the canvas.
+ */
+function scalePositionsToFitCanvas(
+  positions: CellPosition[],
+  canvasWidth: number,
+  canvasHeight: number,
+  gap: number
+): CellPosition[] {
+  if (positions.length === 0) return positions;
+
+  // Find current bounds
+  const maxX = Math.max(...positions.map(p => p.x + p.width));
+  const maxY = Math.max(...positions.map(p => p.y + p.height));
+
+  // Calculate scale factors
+  const scaleX = canvasWidth / maxX;
+  const scaleY = canvasHeight / maxY;
+  const scale = Math.min(scaleX, scaleY);
+
+  // Apply scaling and center if needed
+  const scaledWidth = maxX * scale;
+  const scaledHeight = maxY * scale;
+  const offsetX = Math.floor((canvasWidth - scaledWidth) / 2);
+  const offsetY = Math.floor((canvasHeight - scaledHeight) / 2);
+
+  return positions.map(p => ({
+    x: Math.floor(p.x * scale + offsetX),
+    y: Math.floor(p.y * scale + offsetY),
+    width: Math.floor(p.width * scale),
+    height: Math.floor(p.height * scale),
+    mediaIndex: p.mediaIndex,
+  }));
+}
+
+/**
+ * Legacy custom layout - kept for compatibility.
+ * Consider using calculateDynamicLayout for better results.
+ */
+export function calculateCustomLayout(media: MediaItem[], canvasWidth: number, canvasHeight: number, gap: number = 0): CellPosition[] {
+  return calculateDynamicLayout(media, canvasWidth, canvasHeight, gap);
 }
 
 export async function generateCollage(config: CollageConfig): Promise<void> {
@@ -195,12 +319,17 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     media = tempFiles;
   }
 
-  // Calculate positions
+  // Calculate positions based on layout type
   let positions: CellPosition[];
   if (layout.type === "custom" && layout.positions) {
+    // Custom predefined positions
     positions = layout.positions;
+  } else if (layout.type === "grid") {
+    // Traditional grid layout with uniform cells
+    positions = calculateGridLayout(media.length, width, height, layout.columns, layout.rows, layout.gap || 0);
   } else {
-    positions = calculateCustomLayout(media, width, height, layout.gap || 0);
+    // Dynamic layout that preserves aspect ratios (default)
+    positions = calculateDynamicLayout(media, width, height, layout.gap || 0);
   }
 
   // Build FFmpeg filter complex
@@ -226,23 +355,23 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   for (let i = 0; i < media.length; i++) {
     const item = media[i];
     const pos = positions[i];
-    if (!pos) continue;
+    if (!pos || !item) continue;
 
     inputs.push("-i", item.path);
 
     const inputLabel = `[${i}:v]`;
     const scaledLabel = `[v${i}]`;
-    const loopedLabel = `[vl${i}]`;
 
     if (item.type === "image") {
-      // For images: loop for duration
+      // For images: loop for duration, scale to exactly fit cell (cell sized to aspect ratio)
       filterParts.push(
-        `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:force_original_aspect_ratio=increase,crop=${pos.width}:${pos.height},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
+        `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:flags=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
       );
     } else {
-      // For videos: loop if needed, scale based on orientation
+      // For videos: loop if needed, scale to exactly fit cell (cell sized to aspect ratio)
       const loopFilter = item.loop !== false ? `loop=loop=-1:size=10000:start=0,` : "";
-      const scaleFilter = `scale=${pos.width}:${pos.height}:force_original_aspect_ratio=increase,crop=${pos.width}:${pos.height}`;
+      // Scale directly to cell size - cells are calculated to match video aspect ratios
+      const scaleFilter = `scale=${pos.width}:${pos.height}:flags=lanczos`;
       filterParts.push(
         `${inputLabel}${loopFilter}${scaleFilter},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
       );
