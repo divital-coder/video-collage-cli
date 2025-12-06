@@ -14,7 +14,11 @@ export interface CollageConfig {
   layout: LayoutConfig;
   media: MediaItem[];
   background?: string; // Background color (default: black)
+  shader?: string; // Shader effect to apply (vignette, bloom, chromatic, noise, crt, dreamy)
+  gpu?: boolean; // Use GPU encoding
 }
+
+export type ShaderType = "vignette" | "bloom" | "chromatic" | "noise" | "crt" | "dreamy";
 
 export interface LayoutConfig {
   type: "grid" | "custom";

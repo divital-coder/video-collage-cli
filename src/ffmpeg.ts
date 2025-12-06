@@ -1,7 +1,44 @@
-import type { MediaInfo, CollageConfig, CellPosition } from "./types";
+import type { MediaInfo, CollageConfig, CellPosition, ShaderType } from "./types";
+import path from "path";
 
 const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff"];
 const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v"];
+
+const SHADER_DIR = path.join(import.meta.dir, "..", "shaders");
+
+export const AVAILABLE_SHADERS: ShaderType[] = ["vignette", "bloom", "chromatic", "noise", "crt", "dreamy"];
+
+// Get FFmpeg filter chain for each shader effect
+export function getShaderFilter(shader: ShaderType, width: number, height: number): string {
+  switch (shader) {
+    case "vignette":
+      // Vignette effect using vignette filter
+      return "vignette=PI/4:0.5";
+
+    case "bloom":
+      // Bloom/glow effect using split, blur, and blend
+      return "split[a][b];[b]gblur=sigma=20,curves=all='0/0 0.5/0.7 1/1'[blur];[a][blur]blend=all_mode=screen:all_opacity=0.3";
+
+    case "chromatic":
+      // Chromatic aberration using rgbashift
+      return "rgbashift=rh=-4:rv=0:gh=0:gv=0:bh=4:bv=0:edge=smear";
+
+    case "noise":
+      // Film grain using noise filter
+      return "noise=alls=15:allf=t+u";
+
+    case "crt":
+      // CRT effect: scanlines + vignette + slight blur
+      return `format=rgb24,split[a][b];[a]curves=all='0/0.05 0.5/0.5 1/0.95'[c];[b]scale=${width}:${height*2}:flags=neighbor,scale=${width}:${height}:flags=neighbor[scan];[c][scan]blend=all_mode=multiply:all_opacity=0.15,vignette=PI/3:0.4,noise=alls=8:allf=t`;
+
+    case "dreamy":
+      // Dreamy soft glow with desaturation
+      return "split[a][b];[b]gblur=sigma=30[blur];[a][blur]blend=all_mode=softlight:all_opacity=0.5,eq=saturation=0.8:brightness=0.05,vignette=PI/4:0.3";
+
+    default:
+      return "";
+  }
+}
 
 export function getMediaType(filePath: string): "video" | "image" | null {
   const ext = filePath.toLowerCase().slice(filePath.lastIndexOf("."));
@@ -73,7 +110,36 @@ export function calculateGridLayout(
 }
 
 export async function generateCollage(config: CollageConfig): Promise<void> {
-  const { media, layout, width, height, duration, fps, output, background = "black" } = config;
+  const { layout, width, height, duration, fps, output, background = "black", shader, gpu = false } = config;
+  let { media } = config;
+
+  // If more than 9 media items, process in batches
+  if (media.length > 9) {
+    const batchSize = 4;
+    const batches: MediaItem[][] = [];
+    for (let i = 0; i < media.length; i += batchSize) {
+      batches.push(media.slice(i, i + batchSize));
+    }
+    const tempFiles: MediaItem[] = [];
+    for (let i = 0; i < batches.length; i++) {
+      const tempOutput = `temp_collage_${i}.mp4`;
+      const batchConfig: CollageConfig = {
+        output: tempOutput,
+        width,
+        height,
+        duration,
+        fps,
+        background,
+        shader,
+        gpu,
+        layout,
+        media: batches[i],
+      };
+      await generateCollage(batchConfig);
+      tempFiles.push({ path: tempOutput, type: 'video', loop: false });
+    }
+    media = tempFiles;
+  }
 
   // Calculate positions
   let positions: CellPosition[];
@@ -94,6 +160,13 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   const inputs: string[] = [];
   const filterParts: string[] = [];
   const overlayChain: string[] = [];
+
+  // Disable loop for videos to avoid FFmpeg issues
+  for (const item of media) {
+    if (item.type === "video") {
+      item.loop = false;
+    }
+  }
 
   // Add background
   filterParts.push(`color=c=${background}:s=${width}x${height}:d=${duration}:r=${fps}[bg]`);
@@ -116,7 +189,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
       );
     } else {
       // For videos: loop if needed, scale to fit cell
-      const loopFilter = item.loop !== false ? `loop=loop=-1:size=32767:start=0,` : "";
+      const loopFilter = item.loop !== false ? `loop=loop=-1:size=10000:start=0,` : "";
       filterParts.push(
         `${inputLabel}${loopFilter}setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:force_original_aspect_ratio=decrease,pad=${pos.width}:${pos.height}:(ow-iw)/2:(oh-ih)/2:color=${background},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
       );
@@ -129,11 +202,21 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     const pos = positions[i];
     if (!pos) continue;
 
-    const outputLabel = i === positions.length - 1 ? "[out]" : `[tmp${i}]`;
+    // If this is the last overlay, either apply shader or output directly
+    const isLast = i === positions.length - 1;
+    const outputLabel = isLast ? (shader ? "[pre_shader]" : "[out]") : `[tmp${i}]`;
     filterParts.push(
       `${lastLabel}[v${i}]overlay=x=${pos.x}:y=${pos.y}:shortest=0${outputLabel}`
     );
     lastLabel = outputLabel;
+  }
+
+  // Apply shader effect if specified
+  if (shader && AVAILABLE_SHADERS.includes(shader as ShaderType)) {
+    const shaderFilter = getShaderFilter(shader as ShaderType, width, height);
+    if (shaderFilter) {
+      filterParts.push(`[pre_shader]${shaderFilter}[out]`);
+    }
   }
 
   const filterComplex = filterParts.join(";");
@@ -141,12 +224,13 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   // Build FFmpeg command
   const args = [
     "-y", // Overwrite output
+    ...(gpu ? ["-hwaccel", "cuda"] : []), // Use GPU acceleration if enabled
     ...inputs,
     "-filter_complex", filterComplex,
     "-map", "[out]",
-    "-c:v", "libx264",
+    "-c:v", gpu ? "h264_nvenc" : "libx264",
     "-preset", "medium",
-    "-crf", "23",
+    gpu ? "-cq" : "-crf", "23",
     "-pix_fmt", "yuv420p",
     "-t", String(duration),
     "-r", String(fps),
@@ -158,6 +242,9 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   console.log(`Resolution: ${width}x${height}`);
   console.log(`Duration: ${duration}s @ ${fps}fps`);
   console.log(`Media items: ${media.length}`);
+  if (shader) {
+    console.log(`Shader: ${shader}`);
+  }
   console.log("");
 
   try {

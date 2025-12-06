@@ -101,6 +101,8 @@ export async function scanDirectory(dirPath: string): Promise<MediaItem[]> {
   for await (const file of glob.scan({ cwd: dirPath, absolute: true })) {
     const type = getMediaType(file);
     if (type) {
+      // Skip likely duplicate files with (1) in name
+      if (file.includes(' (1)')) continue;
       items.push({ path: file, type, loop: true });
     }
   }

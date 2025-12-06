@@ -2,7 +2,7 @@
 
 import { parseArgs } from "util";
 import { loadConfig, scanDirectory, generateSampleConfig } from "./config";
-import { generateCollage, getMediaType } from "./ffmpeg";
+import { generateCollage, getMediaType, AVAILABLE_SHADERS } from "./ffmpeg";
 import { downloadMedia, downloadMultiple, listMedia, getMediaDir } from "./downloader";
 import type { CollageConfig, MediaItem } from "./types";
 
@@ -50,9 +50,19 @@ OPTIONS:
   --columns <n>           Grid columns (auto-calculated if not set)
   --rows <n>              Grid rows (auto-calculated if not set)
   --gap <pixels>          Gap between cells (default: 4)
-  --bg <color>            Background color (default: black)
-  --init                  Generate sample config file
-  --help                  Show this help
+   --bg <color>            Background color (default: black)
+   --shader <name>         Apply shader effect to output
+   --gpu                   Use GPU encoding (default: false)
+   --init                  Generate sample config file
+   --help                  Show this help
+
+SHADERS:
+  vignette    - Darkens edges of the frame
+  bloom       - Adds glow effect to bright areas
+  chromatic   - RGB channel separation (retro look)
+  noise       - Film grain texture
+  crt         - CRT monitor effect with scanlines
+  dreamy      - Soft ethereal glow with desaturation
 
 EXAMPLES:
   # Generate from media folder (default)
@@ -63,6 +73,10 @@ EXAMPLES:
 
   # Custom grid and duration
   video-collage generate --columns 3 --rows 2 --duration 120
+
+  # Apply shader effect
+  video-collage generate --shader vignette
+  video-collage generate --shader crt -o retro-wallpaper.mp4
 `;
 
 const DOWNLOAD_HELP = `
@@ -110,9 +124,11 @@ async function runGenerate(args: string[]) {
       columns: { type: "string" },
       rows: { type: "string" },
       gap: { type: "string", default: "4" },
-      bg: { type: "string", default: "black" },
-      init: { type: "boolean" },
-      help: { type: "boolean" },
+       bg: { type: "string", default: "black" },
+       shader: { type: "string", short: "s" },
+       gpu: { type: "boolean" },
+       init: { type: "boolean" },
+       help: { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -166,6 +182,13 @@ async function runGenerate(args: string[]) {
       process.exit(1);
     }
 
+    // Validate shader if provided
+    if (values.shader && !AVAILABLE_SHADERS.includes(values.shader as any)) {
+      console.error(`Error: Unknown shader '${values.shader}'`);
+      console.log(`\nAvailable shaders: ${AVAILABLE_SHADERS.join(", ")}`);
+      process.exit(1);
+    }
+
     config = {
       output: values.output!,
       width: parseInt(values.width!, 10),
@@ -173,6 +196,8 @@ async function runGenerate(args: string[]) {
       duration: parseInt(values.duration!, 10),
       fps: parseInt(values.fps!, 10),
       background: values.bg,
+      shader: values.shader,
+      gpu: values.gpu || false,
       layout: {
         type: "grid",
         columns: values.columns ? parseInt(values.columns, 10) : undefined,
