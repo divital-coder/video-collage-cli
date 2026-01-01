@@ -8,7 +8,9 @@
   },
   "scripts": {
     "start": "bun run src/index.ts",
-    "build": "bun build src/index.ts --compile --outfile video-collage"
+    "build": "bun build src/index.ts --compile --outfile video-collage",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit --skipLibCheck"
   },
   "private": true,
   "devDependencies": {
