@@ -54,8 +54,8 @@ OPTIONS:
   --bg <color>            Background color (default: black)
   --shader <name>         Apply shader effect to output
   --preset <name>         Encoding preset (see PRESETS below)
-  --gpu                   Use NVENC GPU encoding only
-  --gpu-full              Full CUDA pipeline (decode + filters + encode on GPU)
+  --gpu                   Hybrid: CPU filters + NVENC encoding (recommended)
+  --gpu-experimental      Full CUDA pipeline (experimental, unreliable)
   --init                  Generate sample config file
   --help                  Show this help
 
@@ -74,10 +74,10 @@ PRESETS:
   best        Slowest, best quality
 
 GPU MODES:
-  --gpu       NVENC encoding only (CPU filters, GPU encode)
-  --gpu-full  Full CUDA pipeline - scale_cuda + overlay_cuda + NVENC
-              Offloads all processing to GPU, minimal CPU usage
-              Requires NVIDIA GPU with CUDA support
+  --gpu              Hybrid mode (recommended) - CPU filters + NVENC encoding
+                     Fast and reliable, works on all NVIDIA GPUs
+  --gpu-experimental Full CUDA pipeline (unreliable)
+                     May fail with "Function not implemented" on some GPUs
 
 SHADERS:
   vignette    Darkens edges of the frame
@@ -103,8 +103,8 @@ EXAMPLES:
   # Fast encoding for preview
   video-collage generate --preset ultrafast -o preview.mp4
 
-  # Full GPU acceleration (RTX 3050, etc.)
-  video-collage generate --gpu-full
+  # GPU acceleration (recommended for NVIDIA)
+  video-collage generate --gpu
 
   # Apply shader effect
   video-collage generate --shader vignette
@@ -162,7 +162,7 @@ async function runGenerate(args: string[]) {
       shader: { type: "string", short: "s" },
       preset: { type: "string", short: "p", default: "balanced" },
       gpu: { type: "boolean" },
-      "gpu-full": { type: "boolean" },
+      "gpu-experimental": { type: "boolean" },
       init: { type: "boolean" },
       help: { type: "boolean" },
     },
@@ -252,7 +252,7 @@ async function runGenerate(args: string[]) {
       shader: values.shader,
       preset: values.preset as EncodingPreset,
       gpu: values.gpu || false,
-      gpuFull: values["gpu-full"] || false,
+      gpuExperimental: values["gpu-experimental"] || false,
       layout: {
         type: layoutType,
         columns: values.columns ? parseInt(values.columns, 10) : undefined,

@@ -16,8 +16,8 @@ export interface CollageConfig {
   media: MediaItem[];
   background?: string; // Background color (default: black)
   shader?: string; // Shader effect to apply (vignette, bloom, chromatic, noise, crt, dreamy)
-  gpu?: boolean; // Use GPU encoding only
-  gpuFull?: boolean; // Use full GPU pipeline (decoding + filters + encoding)
+  gpu?: boolean; // Hybrid mode: CPU filters + NVENC encoding
+  gpuExperimental?: boolean; // Experimental: Full CUDA pipeline (unreliable)
   preset?: "ultrafast" | "fast" | "balanced" | "quality" | "best"; // Encoding preset
 }
 

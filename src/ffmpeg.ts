@@ -329,14 +329,16 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     background = "black",
     shader,
     gpu = false,
-    gpuFull = false,
+    gpuExperimental = false,
     preset = "balanced" as EncodingPreset,
   } = config;
   let { media } = config;
 
-  // Check if full GPU mode is requested
-  const useFullGpu = gpuFull || gpu;
-  const useCudaFilters = gpuFull; // Only use CUDA filters if explicitly requested
+  // GPU mode logic:
+  // - gpu: Hybrid mode - CPU filters + NVENC encoding (reliable)
+  // - gpuExperimental: Full CUDA pipeline (unreliable, may fail)
+  const useNvencEncoding = gpu || gpuExperimental;
+  const useCudaFilters = gpuExperimental;
 
   // Prepare media with parallel info fetching
   console.log("Analyzing media files...");
@@ -364,7 +366,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
         fps,
         background,
         gpu,
-        gpuFull,
+        gpuExperimental,
         layout,
         media: batches[i],
       };
@@ -431,13 +433,10 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   // Build FFmpeg command with optimized settings
   const args: string[] = ["-y"];
 
-  // Hardware acceleration for decoding (when using GPU)
-  if (useFullGpu) {
+  // Hardware acceleration only for experimental CUDA mode
+  // Hybrid mode uses CPU decode (fast enough, avoids format issues)
+  if (useCudaFilters) {
     args.push("-hwaccel", "cuda");
-    if (!useCudaFilters) {
-      // If not using CUDA filters, we still want fast decoding
-      args.push("-hwaccel_output_format", "cuda");
-    }
   }
 
   args.push(...inputs);
@@ -447,7 +446,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   args.push("-map", "[out]");
 
   // Encoder settings
-  if (useFullGpu) {
+  if (useNvencEncoding) {
     args.push(
       "-c:v", "h264_nvenc",
       "-preset", gpuSettings.preset,
@@ -479,7 +478,12 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   console.log(`Duration: ${duration}s @ ${fps}fps`);
   console.log(`Layout: ${layout.type}`);
   console.log(`Media items: ${media.length}`);
-  console.log(`GPU: ${useCudaFilters ? "Full CUDA pipeline" : useFullGpu ? "NVENC encoding" : "CPU"}`);
+  const gpuModeLabel = useCudaFilters
+    ? "Experimental CUDA pipeline"
+    : useNvencEncoding
+      ? "Hybrid (CPU filters + NVENC)"
+      : "CPU";
+  console.log(`GPU: ${gpuModeLabel}`);
   console.log(`Preset: ${preset}`);
   if (shader) {
     console.log(`Shader: ${shader}`);
@@ -519,10 +523,10 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
         if (errorLines.length > 0) {
           console.error(errorLines.slice(-3).join("\n"));
         }
-        console.error("Falling back to CPU...\n");
-        // Retry with CPU
-        const cpuConfig = { ...config, gpu: false, gpuFull: false };
-        return generateCollage(cpuConfig);
+        console.error("Falling back to hybrid mode (CPU filters + NVENC)...\n");
+        // Retry with hybrid mode - CPU filters but still NVENC encoding
+        const hybridConfig = { ...config, gpu: true, gpuExperimental: false };
+        return generateCollage(hybridConfig);
       }
       throw new Error(`FFmpeg exited with code ${proc.exitCode}\n${errorOutput.slice(-500)}`);
     }

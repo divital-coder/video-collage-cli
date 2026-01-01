@@ -49,8 +49,8 @@ bun run src/index.ts download https://youtube.com/watch?v=xxx
 # Generate collage
 bun run src/index.ts generate
 
-# Full GPU acceleration (NVIDIA)
-bun run src/index.ts generate --gpu-full
+# GPU acceleration (NVIDIA) - recommended
+bun run src/index.ts generate --gpu
 ```
 
 ### Download Command
@@ -79,8 +79,8 @@ Options:
   --gap <pixels>          Gap between cells (default: 0)
   --shader <name>         Apply shader effect
   --preset <name>         Encoding preset
-  --gpu                   NVENC encoding only
-  --gpu-full              Full CUDA pipeline
+  --gpu                   Hybrid: CPU filters + NVENC (recommended)
+  --gpu-experimental      Full CUDA pipeline (unreliable)
 ```
 
 ### List Command
@@ -148,25 +148,32 @@ The tool supports three processing modes:
 
 ```
 CPU Mode (default):
-  Input → [CPU decode] → [CPU scale] → [CPU overlay] → [CPU encode] → Output
+  Input -> [CPU decode] -> [CPU filters] -> [x264 encode] -> Output
 
-GPU Encoding (--gpu):
-  Input → [CPU decode] → [CPU scale] → [CPU overlay] → [NVENC encode] → Output
+Hybrid Mode (--gpu) - RECOMMENDED:
+  Input -> [CPU decode] -> [CPU filters] -> [NVENC encode] -> Output
+                                                  ^
+                              Fast, reliable GPU encoding
 
-Full CUDA (--gpu-full):
-  Input → [CPU decode] → [hwupload_cuda] → [scale_cuda] → [overlay_cuda] → [NVENC] → Output
-                              └── All processing on GPU ──┘
+Experimental (--gpu-experimental) - UNRELIABLE:
+  Input -> [CPU decode] -> [hwupload_cuda] -> [CUDA filters] -> [NVENC] -> Output
+                                                  ^
+                              May fail with "Function not implemented"
 ```
 
-**Filter Chain (Full CUDA):**
+**Why Hybrid Mode?**
+
+CUDA filters (`scale_cuda`, `overlay_cuda`) are unreliable on consumer GPUs. They may fail with cryptic errors like "Function not implemented" even when FFmpeg reports CUDA support. Hybrid mode avoids this by using proven CPU filters for scaling and compositing, while offloading the computationally expensive encoding step to NVENC. This provides significant speedup without the instability.
+
+**Filter Chain (Hybrid Mode):**
 ```
-Background:  color=black:1920x1080 → format=nv12 → hwupload_cuda → [bg_cuda]
+Background:  color=black:1920x1080 -> [bg]
 
-Videos:      [input] → loop → trim → setpts → format=nv12 → hwupload_cuda → scale_cuda → [v_cuda]
+Videos:      [input] -> loop -> scale -> trim -> setpts -> [v0]
 
-Composite:   [bg_cuda][v0_cuda]overlay_cuda → [v1_cuda]overlay_cuda → ... → [out_cuda]
+Composite:   [bg][v0]overlay -> [v1]overlay -> ... -> [out]
 
-Encode:      [out_cuda] → h264_nvenc → output.mp4
+Encode:      [out] -> h264_nvenc (GPU) -> output.mp4
 ```
 
 ### Performance Features
@@ -209,8 +216,8 @@ bun run src/index.ts generate --layout treemap --gap 4
 # Masonry with 4 columns
 bun run src/index.ts generate --layout masonry --columns 4
 
-# Full GPU with quality preset
-bun run src/index.ts generate --gpu-full --preset quality
+# GPU acceleration with quality preset
+bun run src/index.ts generate --gpu --preset quality
 
 # CRT shader effect
 bun run src/index.ts generate --shader crt
@@ -235,7 +242,7 @@ JSON configuration for complex setups:
     "gap": 4
   },
   "shader": "vignette",
-  "gpuFull": true,
+  "gpu": true,
   "preset": "balanced",
   "media": [
     { "path": "video1.mp4", "type": "video" },
@@ -264,13 +271,22 @@ yt-dlp supports 1000+ sites including:
 
 ## GPU Requirements
 
-For `--gpu-full`:
-- NVIDIA GPU with CUDA support
-- FFmpeg compiled with NVENC and CUDA filters
-- Tested on RTX 3050 and similar
+For `--gpu` (hybrid mode, recommended):
+- NVIDIA GPU with NVENC support
+- FFmpeg compiled with NVENC (`h264_nvenc`)
+- Works reliably on all modern NVIDIA GPUs
 
-Check CUDA support:
+For `--gpu-experimental` (full CUDA, unreliable):
+- FFmpeg compiled with NVENC and CUDA filters
+- May fail with "Function not implemented" on many GPUs
+- Falls back to hybrid mode automatically on failure
+
+Check GPU support:
 ```bash
+# Check NVENC (required for --gpu)
+ffmpeg -hide_banner -encoders | grep nvenc
+
+# Check CUDA filters (required for --gpu-experimental)
 ffmpeg -hide_banner -filters | grep cuda
 ```
 
