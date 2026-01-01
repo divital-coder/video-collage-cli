@@ -1,38 +1,44 @@
 import type { MediaInfo, CollageConfig, CellPosition, ShaderType } from "./types";
+import type { MediaItem } from "./types";
+import { calculateLayout, mediaToLayoutItem, clampPositions, type LayoutType } from "./layout";
 import path from "path";
 
 const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff"];
 const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v"];
 
-const SHADER_DIR = path.join(import.meta.dir, "..", "shaders");
-
 export const AVAILABLE_SHADERS: ShaderType[] = ["vignette", "bloom", "chromatic", "noise", "crt", "dreamy"];
+export const AVAILABLE_LAYOUTS: LayoutType[] = ["grid", "dynamic", "masonry", "treemap", "pack"];
+
+// Encoding presets for different quality/speed tradeoffs
+export const ENCODING_PRESETS = {
+  ultrafast: { preset: "ultrafast", crf: 28 },
+  fast: { preset: "veryfast", crf: 26 },
+  balanced: { preset: "medium", crf: 23 },
+  quality: { preset: "slow", crf: 20 },
+  best: { preset: "veryslow", crf: 18 },
+} as const;
+
+export type EncodingPreset = keyof typeof ENCODING_PRESETS;
 
 // Get FFmpeg filter chain for each shader effect
 export function getShaderFilter(shader: ShaderType, width: number, height: number): string {
   switch (shader) {
     case "vignette":
-      // Vignette effect using vignette filter
       return "vignette=PI/4:0.5";
 
     case "bloom":
-      // Bloom/glow effect using split, blur, and blend
       return "split[a][b];[b]gblur=sigma=20,curves=all='0/0 0.5/0.7 1/1'[blur];[a][blur]blend=all_mode=screen:all_opacity=0.3";
 
     case "chromatic":
-      // Chromatic aberration using rgbashift
       return "rgbashift=rh=-4:rv=0:gh=0:gv=0:bh=4:bv=0:edge=smear";
 
     case "noise":
-      // Film grain using noise filter
       return "noise=alls=15:allf=t+u";
 
     case "crt":
-      // CRT effect: scanlines + vignette + slight blur
       return `format=rgb24,split[a][b];[a]curves=all='0/0.05 0.5/0.5 1/0.95'[c];[b]scale=${width}:${height * 2}:flags=neighbor,scale=${width}:${height}:flags=neighbor[scan];[c][scan]blend=all_mode=multiply:all_opacity=0.15,vignette=PI/3:0.4,noise=alls=8:allf=t`;
 
     case "dreamy":
-      // Dreamy soft glow with desaturation
       return "split[a][b];[b]gblur=sigma=30[blur];[a][blur]blend=all_mode=softlight:all_opacity=0.5,eq=saturation=0.8:brightness=0.05,vignette=PI/4:0.3";
 
     default:
@@ -47,6 +53,9 @@ export function getMediaType(filePath: string): "video" | "image" | null {
   return null;
 }
 
+/**
+ * Get media info for a single file
+ */
 export async function getMediaInfo(filePath: string): Promise<MediaInfo> {
   const result = await Bun.$`ffprobe -v quiet -print_format json -show_format -show_streams ${filePath}`.json();
 
@@ -57,7 +66,6 @@ export async function getMediaInfo(filePath: string): Promise<MediaInfo> {
     throw new Error(`No video stream found in ${filePath}`);
   }
 
-  // Parse frame rate
   let fps = 30;
   if (videoStream.r_frame_rate) {
     const [num, den] = videoStream.r_frame_rate.split("/").map(Number);
@@ -73,234 +81,119 @@ export async function getMediaInfo(filePath: string): Promise<MediaInfo> {
   };
 }
 
-export function calculateGridLayout(
-  mediaCount: number,
-  canvasWidth: number,
-  canvasHeight: number,
-  columns?: number,
-  rows?: number,
-  gap: number = 0
-): CellPosition[] {
-  // Auto-calculate grid dimensions if not specified
-  if (!columns || !rows) {
-    const sqrt = Math.sqrt(mediaCount);
-    columns = Math.ceil(sqrt);
-    rows = Math.ceil(mediaCount / columns);
-  }
-
-  const cellWidth = Math.floor((canvasWidth - gap * (columns + 1)) / columns);
-  const cellHeight = Math.floor((canvasHeight - gap * (rows + 1)) / rows);
-
-  const positions: CellPosition[] = [];
-
-  for (let i = 0; i < mediaCount; i++) {
-    const col = i % columns;
-    const row = Math.floor(i / columns);
-
-    positions.push({
-      x: gap + col * (cellWidth + gap),
-      y: gap + row * (cellHeight + gap),
-      width: cellWidth,
-      height: cellHeight,
-      mediaIndex: i,
-    });
-  }
-
-  return positions;
-}
-
 /**
- * Dynamic bin-packing layout that respects video aspect ratios.
- * Uses a row-based packing approach where each row adapts to fit videos
- * with their original proportions, eliminating black borders.
+ * Get media info for multiple files in parallel
+ * Significantly faster than sequential calls for large media collections
  */
-export function calculateDynamicLayout(
-  media: MediaItem[],
-  canvasWidth: number,
-  canvasHeight: number,
-  gap: number = 0
-): CellPosition[] {
-  const positions: CellPosition[] = [];
+export async function getMediaInfoBatch(filePaths: string[]): Promise<Map<string, MediaInfo>> {
+  const results = new Map<string, MediaInfo>();
 
-  // Get media with valid info, preserving original indices
-  const mediaWithInfo = media
-    .map((item, index) => ({ item, index, aspect: item.info ? item.info.width / item.info.height : 16 / 9 }))
-    .filter(m => m.item.info || m.item.type === 'image');
+  // Process in parallel with concurrency limit to avoid overwhelming system
+  const BATCH_SIZE = 8;
 
-  if (mediaWithInfo.length === 0) {
-    return calculateGridLayout(media.length, canvasWidth, canvasHeight, undefined, undefined, gap);
-  }
-
-  // Calculate optimal row distribution
-  const rows = calculateOptimalRows(mediaWithInfo, canvasWidth, canvasHeight, gap);
-
-  let currentY = 0;
-
-  for (const row of rows) {
-    if (row.items.length === 0) continue;
-
-    // Calculate row height based on available width and total aspect ratios
-    const totalGaps = gap * (row.items.length - 1);
-    const availableWidth = canvasWidth - totalGaps;
-
-    // Sum of aspect ratios in this row
-    const totalAspect = row.items.reduce((sum, item) => sum + item.aspect, 0);
-
-    // Row height that makes all items fit perfectly side by side
-    const rowHeight = Math.min(availableWidth / totalAspect, row.maxHeight);
-
-    let currentX = 0;
-
-    for (const item of row.items) {
-      const cellWidth = Math.floor(rowHeight * item.aspect);
-      const cellHeight = Math.floor(rowHeight);
-
-      positions.push({
-        x: Math.floor(currentX),
-        y: Math.floor(currentY),
-        width: cellWidth,
-        height: cellHeight,
-        mediaIndex: item.index,
-      });
-
-      currentX += cellWidth + gap;
-    }
-
-    currentY += rowHeight + gap;
-  }
-
-  // Scale positions to fill canvas while maintaining relative layout
-  return scalePositionsToFitCanvas(positions, canvasWidth, canvasHeight, gap);
-}
-
-interface RowItem {
-  item: MediaItem;
-  index: number;
-  aspect: number;
-}
-
-interface Row {
-  items: RowItem[];
-  maxHeight: number;
-}
-
-/**
- * Calculate optimal row distribution for packing media items.
- * Uses a greedy algorithm that tries to balance row heights.
- */
-function calculateOptimalRows(
-  mediaWithInfo: RowItem[],
-  canvasWidth: number,
-  canvasHeight: number,
-  gap: number
-): Row[] {
-  // Sort by aspect ratio to group similar items (wide with wide, tall with tall)
-  const sorted = [...mediaWithInfo].sort((a, b) => b.aspect - a.aspect);
-
-  const rows: Row[] = [];
-  let remaining = [...sorted];
-
-  // Target row height for initial distribution
-  const numRows = Math.ceil(Math.sqrt(mediaWithInfo.length * (canvasHeight / canvasWidth)));
-  const targetRowHeight = (canvasHeight - gap * (numRows - 1)) / numRows;
-
-  while (remaining.length > 0) {
-    const row: RowItem[] = [];
-    let rowAspectSum = 0;
-
-    // Fill row until adding more would exceed canvas width at target height
-    while (remaining.length > 0) {
-      const candidate = remaining[0];
-      if (!candidate) break;
-
-      const newAspectSum = rowAspectSum + candidate.aspect;
-      const testRowWidth = targetRowHeight * newAspectSum + gap * row.length;
-
-      if (row.length > 0 && testRowWidth > canvasWidth) {
-        break;
+  for (let i = 0; i < filePaths.length; i += BATCH_SIZE) {
+    const batch = filePaths.slice(i, i + BATCH_SIZE);
+    const promises = batch.map(async (filePath) => {
+      try {
+        const info = await getMediaInfo(filePath);
+        return { filePath, info, error: null };
+      } catch (error) {
+        return { filePath, info: null, error };
       }
+    });
 
-      row.push(candidate);
-      rowAspectSum = newAspectSum;
-      remaining.shift();
-    }
+    const batchResults = await Promise.all(promises);
 
-    if (row.length > 0) {
-      rows.push({ items: row, maxHeight: targetRowHeight });
-    }
-  }
-
-  // Rebalance rows if needed (if last row has very few items)
-  const lastRow = rows[rows.length - 1];
-  const prevRow = rows[rows.length - 2];
-  if (rows.length > 1 && lastRow && prevRow && lastRow.items.length === 1 && prevRow.items.length > 2) {
-    // Move one item from previous row to last row
-    const moved = prevRow.items.pop();
-    if (moved) {
-      lastRow.items.unshift(moved);
+    for (const result of batchResults) {
+      if (result.info) {
+        results.set(result.filePath, result.info);
+      }
     }
   }
 
-  return rows;
+  return results;
 }
 
 /**
- * Scale all positions proportionally to fill the canvas.
+ * Prepare media items with their info loaded in parallel
  */
-function scalePositionsToFitCanvas(
-  positions: CellPosition[],
-  canvasWidth: number,
-  canvasHeight: number,
-  gap: number
-): CellPosition[] {
-  if (positions.length === 0) return positions;
+export async function prepareMediaItems(media: MediaItem[], duration: number): Promise<MediaItem[]> {
+  // Get all video paths that need info
+  const videoPaths = media
+    .filter(item => item.type === "video" && !item.info)
+    .map(item => item.path);
 
-  // Find current bounds
-  const maxX = Math.max(...positions.map(p => p.x + p.width));
-  const maxY = Math.max(...positions.map(p => p.y + p.height));
+  // Fetch info in parallel
+  const infoMap = await getMediaInfoBatch(videoPaths);
 
-  // Calculate scale factors
-  const scaleX = canvasWidth / maxX;
-  const scaleY = canvasHeight / maxY;
-  const scale = Math.min(scaleX, scaleY);
+  // Update media items with fetched info
+  for (const item of media) {
+    if (item.type === "video" && !item.info) {
+      const info = infoMap.get(item.path);
+      if (info) {
+        item.info = info;
+        item.loop = info.duration < duration;
+      }
+    }
+  }
 
-  // Apply scaling and center if needed
-  const scaledWidth = maxX * scale;
-  const scaledHeight = maxY * scale;
-  const offsetX = Math.floor((canvasWidth - scaledWidth) / 2);
-  const offsetY = Math.floor((canvasHeight - scaledHeight) / 2);
-
-  return positions.map(p => ({
-    x: Math.floor(p.x * scale + offsetX),
-    y: Math.floor(p.y * scale + offsetY),
-    width: Math.floor(p.width * scale),
-    height: Math.floor(p.height * scale),
-    mediaIndex: p.mediaIndex,
-  }));
+  return media;
 }
 
-/**
- * Legacy custom layout - kept for compatibility.
- * Consider using calculateDynamicLayout for better results.
- */
+// Re-export layout functions for backwards compatibility
+export { calculateLayout } from "./layout";
+export {
+  calculateGridLayout,
+  calculateDynamicLayout,
+  calculateMasonryLayout,
+  calculateTreemapLayout,
+  calculatePackLayout,
+} from "./layout";
+
+// Legacy function - now delegates to layout module
 export function calculateCustomLayout(media: MediaItem[], canvasWidth: number, canvasHeight: number, gap: number = 0): CellPosition[] {
-  return calculateDynamicLayout(media, canvasWidth, canvasHeight, gap);
+  const items = media.map((m, i) => mediaToLayoutItem(m.info, i));
+  return calculateLayout(items, {
+    type: "dynamic",
+    canvasWidth,
+    canvasHeight,
+    gap,
+  });
 }
 
 export async function generateCollage(config: CollageConfig): Promise<void> {
-  const { layout, width, height, duration, fps, output, background = "black", shader, gpu = false } = config;
+  const {
+    layout,
+    width,
+    height,
+    duration,
+    fps,
+    output,
+    background = "black",
+    shader,
+    gpu = false,
+    preset = "balanced" as EncodingPreset,
+  } = config;
   let { media } = config;
 
-  // If more than 9 media items, process in batches
-  if (media.length > 9) {
-    const batchSize = 4;
+  // Prepare media with parallel info fetching
+  console.log("Analyzing media files...");
+  media = await prepareMediaItems(media, duration);
+
+  // If more than 12 media items, process in batches
+  if (media.length > 12) {
+    const batchSize = 6;
     const batches: MediaItem[][] = [];
     for (let i = 0; i < media.length; i += batchSize) {
       batches.push(media.slice(i, i + batchSize));
     }
+
+    console.log(`Processing ${batches.length} batches of media...`);
+
     const tempFiles: MediaItem[] = [];
     for (let i = 0; i < batches.length; i++) {
-      const tempOutput = `temp_collage_${i}.mp4`;
+      console.log(`\nBatch ${i + 1}/${batches.length}...`);
+      const tempOutput = `temp_collage_${i}_${Date.now()}.mp4`;
       const batchConfig: CollageConfig = {
         output: tempOutput,
         width,
@@ -308,44 +201,50 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
         duration,
         fps,
         background,
-        shader,
         gpu,
         layout,
         media: batches[i],
       };
       await generateCollage(batchConfig);
-      tempFiles.push({ path: tempOutput, type: 'video', loop: false });
+      const tempInfo = await getMediaInfo(tempOutput);
+      tempFiles.push({ path: tempOutput, type: "video", loop: true, info: tempInfo });
     }
     media = tempFiles;
   }
 
-  // Calculate positions based on layout type
+  // Calculate positions using new layout engine
   let positions: CellPosition[];
+
   if (layout.type === "custom" && layout.positions) {
-    // Custom predefined positions
     positions = layout.positions;
-  } else if (layout.type === "grid") {
-    // Traditional grid layout with uniform cells
-    positions = calculateGridLayout(media.length, width, height, layout.columns, layout.rows, layout.gap || 0);
   } else {
-    // Dynamic layout that preserves aspect ratios (default)
-    positions = calculateDynamicLayout(media, width, height, layout.gap || 0);
+    // Convert media to layout items
+    const layoutItems = media.map((item, index) => mediaToLayoutItem(item.info, index));
+
+    positions = calculateLayout(layoutItems, {
+      type: layout.type as LayoutType,
+      canvasWidth: width,
+      canvasHeight: height,
+      gap: layout.gap || 0,
+      columns: layout.columns,
+      rows: layout.rows,
+    });
+
+    // Ensure positions are within bounds
+    positions = clampPositions(positions, width, height);
   }
 
   // Build FFmpeg filter complex
   const inputs: string[] = [];
   const filterParts: string[] = [];
-  const overlayChain: string[] = [];
 
-  // Set loop and info for videos
+  // Set loop and info for temp collages
   for (const item of media) {
-    if (item.path.startsWith('temp_collage_')) {
-      item.loop = true; // Loop temp collages in final
-      item.info = await getMediaInfo(item.path);
-    } else if (item.type === "video") {
-      const info = await getMediaInfo(item.path);
-      item.loop = info.duration < duration; // Loop short videos
-      item.info = info;
+    if (item.path.startsWith("temp_collage_")) {
+      item.loop = true;
+      if (!item.info) {
+        item.info = await getMediaInfo(item.path);
+      }
     }
   }
 
@@ -354,7 +253,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
 
   for (let i = 0; i < media.length; i++) {
     const item = media[i];
-    const pos = positions[i];
+    const pos = positions.find(p => p.mediaIndex === i);
     if (!pos || !item) continue;
 
     inputs.push("-i", item.path);
@@ -363,14 +262,11 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     const scaledLabel = `[v${i}]`;
 
     if (item.type === "image") {
-      // For images: loop for duration, scale to exactly fit cell (cell sized to aspect ratio)
       filterParts.push(
         `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:flags=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
       );
     } else {
-      // For videos: loop if needed, scale to exactly fit cell (cell sized to aspect ratio)
       const loopFilter = item.loop !== false ? `loop=loop=-1:size=10000:start=0,` : "";
-      // Scale directly to cell size - cells are calculated to match video aspect ratios
       const scaleFilter = `scale=${pos.width}:${pos.height}:flags=lanczos`;
       filterParts.push(
         `${inputLabel}${loopFilter}${scaleFilter},trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
@@ -378,17 +274,18 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     }
   }
 
-  // Build overlay chain
+  // Build overlay chain - sort positions by index
+  const sortedPositions = [...positions].sort((a, b) => a.mediaIndex - b.mediaIndex);
+
   let lastLabel = "[bg]";
-  for (let i = 0; i < positions.length; i++) {
-    const pos = positions[i];
+  for (let i = 0; i < sortedPositions.length; i++) {
+    const pos = sortedPositions[i];
     if (!pos) continue;
 
-    // If this is the last overlay, either apply shader or output directly
-    const isLast = i === positions.length - 1;
+    const isLast = i === sortedPositions.length - 1;
     const outputLabel = isLast ? (shader ? "[pre_shader]" : "[out]") : `[tmp${i}]`;
     filterParts.push(
-      `${lastLabel}[v${i}]overlay=x=${pos.x}:y=${pos.y}:shortest=0${outputLabel}`
+      `${lastLabel}[v${pos.mediaIndex}]overlay=x=${pos.x}:y=${pos.y}:shortest=0${outputLabel}`
     );
     lastLabel = outputLabel;
   }
@@ -403,19 +300,24 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
 
   const filterComplex = filterParts.join(";");
 
-  // Build FFmpeg command
+  // Get encoding settings
+  const encodingSettings = ENCODING_PRESETS[preset] || ENCODING_PRESETS.balanced;
+
+  // Build FFmpeg command with optimized settings
   const args = [
-    "-y", // Overwrite output
-    ...(gpu ? ["-hwaccel", "cuda"] : []), // Use GPU acceleration if enabled
+    "-y",
+    ...(gpu ? ["-hwaccel", "cuda"] : []),
     ...inputs,
     "-filter_complex", filterComplex,
     "-map", "[out]",
     "-c:v", gpu ? "h264_nvenc" : "libx264",
-    "-preset", "medium",
-    gpu ? "-cq" : "-crf", "23",
+    "-preset", gpu ? "p4" : encodingSettings.preset,
+    gpu ? "-cq" : "-crf", String(encodingSettings.crf),
     "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart",
     "-t", String(duration),
     "-r", String(fps),
+    ...(gpu ? [] : ["-threads", "0"]), // Auto-detect threads for CPU encoding
     output,
   ];
 
@@ -423,6 +325,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   console.log(`Output: ${output}`);
   console.log(`Resolution: ${width}x${height}`);
   console.log(`Duration: ${duration}s @ ${fps}fps`);
+  console.log(`Layout: ${layout.type}`);
   console.log(`Media items: ${media.length}`);
   if (shader) {
     console.log(`Shader: ${shader}`);
@@ -435,7 +338,6 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
       stderr: "pipe",
     });
 
-    // Stream stderr for progress
     const decoder = new TextDecoder();
     const reader = proc.stderr.getReader();
 
@@ -443,7 +345,6 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
       const { done, value } = await reader.read();
       if (done) break;
       const text = decoder.decode(value);
-      // Show progress lines
       if (text.includes("frame=") || text.includes("time=")) {
         process.stdout.write(`\r${text.trim().slice(0, 80)}`);
       }
@@ -453,6 +354,17 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
 
     if (proc.exitCode !== 0) {
       throw new Error(`FFmpeg exited with code ${proc.exitCode}`);
+    }
+
+    // Clean up temp files
+    for (const item of media) {
+      if (item.path.startsWith("temp_collage_")) {
+        try {
+          await Bun.$`rm ${item.path}`.quiet();
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
     }
 
     console.log("\n\nCollage generated successfully!");

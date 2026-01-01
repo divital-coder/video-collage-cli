@@ -2,7 +2,7 @@
 
 import { parseArgs } from "util";
 import { loadConfig, scanDirectory, generateSampleConfig } from "./config";
-import { generateCollage, getMediaType, AVAILABLE_SHADERS } from "./ffmpeg";
+import { generateCollage, getMediaType, AVAILABLE_SHADERS, AVAILABLE_LAYOUTS, ENCODING_PRESETS, type EncodingPreset } from "./ffmpeg";
 import { downloadMedia, downloadMultiple, listMedia, getMediaDir } from "./downloader";
 import type { CollageConfig, MediaItem } from "./types";
 
@@ -47,37 +47,54 @@ OPTIONS:
   -h, --height <pixels>   Output height (default: 1080)
   -t, --duration <secs>   Output duration in seconds (default: 60)
   -f, --fps <rate>        Frames per second (default: 30)
-  --layout <type>         Layout type: dynamic (default) or grid
-  --columns <n>           Grid columns (only for grid layout)
-  --rows <n>              Grid rows (only for grid layout)
+  --layout <type>         Layout type (see LAYOUTS below)
+  --columns <n>           Grid/masonry columns (grid/masonry layouts only)
+  --rows <n>              Grid rows (grid layout only)
   --gap <pixels>          Gap between cells (default: 0)
-   --bg <color>            Background color (default: black)
-   --shader <name>         Apply shader effect to output
-   --gpu                   Use GPU encoding (default: false)
-   --init                  Generate sample config file
-   --help                  Show this help
+  --bg <color>            Background color (default: black)
+  --shader <name>         Apply shader effect to output
+  --preset <name>         Encoding preset (see PRESETS below)
+  --gpu                   Use GPU encoding (default: false)
+  --init                  Generate sample config file
+  --help                  Show this help
 
 LAYOUTS:
-  dynamic     - Dynamic layout that preserves video aspect ratios (no gaps)
-  grid        - Traditional grid with uniform cell sizes
+  dynamic     Aspect-preserving row-based layout (default)
+  grid        Traditional uniform grid
+  masonry     Pinterest-style vertical columns
+  treemap     Space-filling treemap algorithm
+  pack        Bin-packing for mixed sizes
+
+PRESETS:
+  ultrafast   Fastest encoding, larger file
+  fast        Quick encoding, good quality
+  balanced    Default - balanced speed/quality
+  quality     Slower encoding, better quality
+  best        Slowest, best quality
 
 SHADERS:
-  vignette    - Darkens edges of the frame
-  bloom       - Adds glow effect to bright areas
-  chromatic   - RGB channel separation (retro look)
-  noise       - Film grain texture
-  crt         - CRT monitor effect with scanlines
-  dreamy      - Soft ethereal glow with desaturation
+  vignette    Darkens edges of the frame
+  bloom       Adds glow effect to bright areas
+  chromatic   RGB channel separation (retro look)
+  noise       Film grain texture
+  crt         CRT monitor effect with scanlines
+  dreamy      Soft ethereal glow with desaturation
 
 EXAMPLES:
   # Generate from media folder (default)
   video-collage generate
 
-  # Generate from specific files
-  video-collage generate video1.mp4 image1.jpg -o wallpaper.mp4
+  # Generate from specific files with treemap layout
+  video-collage generate video1.mp4 image1.jpg --layout treemap
 
   # Custom grid and duration
   video-collage generate --columns 3 --rows 2 --duration 120
+
+  # Masonry layout with gap
+  video-collage generate --layout masonry --columns 4 --gap 8
+
+  # Fast encoding for preview
+  video-collage generate --preset ultrafast -o preview.mp4
 
   # Apply shader effect
   video-collage generate --shader vignette
@@ -95,6 +112,7 @@ OPTIONS:
   --max-height <pixels>   Maximum video height (default: 1080)
   --audio-only            Download audio only (mp3)
   --generate              Generate collage after downloading
+  --concurrency <n>       Parallel downloads (default: 3)
   --help                  Show this help
 
 SUPPORTED SITES:
@@ -105,14 +123,14 @@ EXAMPLES:
   # Download a YouTube video
   video-collage download https://youtube.com/watch?v=dQw4w9WgXcQ
 
-  # Download multiple videos
+  # Download multiple videos in parallel
   video-collage download https://youtube.com/... https://twitter.com/...
 
   # Download and immediately create collage
   video-collage download --generate https://youtube.com/...
 
-  # Download to custom folder
-  video-collage download -o ~/Videos https://youtube.com/...
+  # Download to custom folder with higher concurrency
+  video-collage download -o ~/Videos --concurrency 5 https://youtube.com/...
 `;
 
 async function runGenerate(args: string[]) {
@@ -132,6 +150,7 @@ async function runGenerate(args: string[]) {
       gap: { type: "string", default: "0" },
       bg: { type: "string", default: "black" },
       shader: { type: "string", short: "s" },
+      preset: { type: "string", short: "p", default: "balanced" },
       gpu: { type: "boolean" },
       init: { type: "boolean" },
       help: { type: "boolean" },
@@ -195,8 +214,22 @@ async function runGenerate(args: string[]) {
       process.exit(1);
     }
 
+    // Validate layout if provided
+    if (values.layout && !AVAILABLE_LAYOUTS.includes(values.layout as any)) {
+      console.error(`Error: Unknown layout '${values.layout}'`);
+      console.log(`\nAvailable layouts: ${AVAILABLE_LAYOUTS.join(", ")}`);
+      process.exit(1);
+    }
+
+    // Validate preset if provided
+    if (values.preset && !Object.keys(ENCODING_PRESETS).includes(values.preset)) {
+      console.error(`Error: Unknown preset '${values.preset}'`);
+      console.log(`\nAvailable presets: ${Object.keys(ENCODING_PRESETS).join(", ")}`);
+      process.exit(1);
+    }
+
     // Determine layout type
-    const layoutType = values.layout === "grid" ? "grid" : "dynamic";
+    const layoutType = values.layout as "grid" | "dynamic" | "masonry" | "treemap" | "pack";
 
     config = {
       output: values.output!,
@@ -206,9 +239,10 @@ async function runGenerate(args: string[]) {
       fps: parseInt(values.fps!, 10),
       background: values.bg,
       shader: values.shader,
+      preset: values.preset as EncodingPreset,
       gpu: values.gpu || false,
       layout: {
-        type: layoutType as "grid" | "dynamic",
+        type: layoutType,
         columns: values.columns ? parseInt(values.columns, 10) : undefined,
         rows: values.rows ? parseInt(values.rows, 10) : undefined,
         gap: parseInt(values.gap!, 10),
@@ -234,6 +268,7 @@ async function runDownload(args: string[]) {
       "max-height": { type: "string", default: "1080" },
       "audio-only": { type: "boolean" },
       generate: { type: "boolean" },
+      concurrency: { type: "string", default: "3" },
       help: { type: "boolean" },
     },
     allowPositionals: true,
@@ -253,11 +288,11 @@ async function runDownload(args: string[]) {
   }
 
   const outputDir = values.output || getMediaDir();
-  const maxHeight = parseInt(values["max-height"]!, 10);
+  const concurrency = parseInt(values.concurrency!, 10);
 
   console.log(`Downloading ${urls.length} item(s) to: ${outputDir}\n`);
 
-  const results = await downloadMultiple(urls, outputDir);
+  const results = await downloadMultiple(urls, outputDir, concurrency);
 
   // Summary
   const successful = results.filter(r => r.success);

@@ -17,12 +17,13 @@ export interface CollageConfig {
   background?: string; // Background color (default: black)
   shader?: string; // Shader effect to apply (vignette, bloom, chromatic, noise, crt, dreamy)
   gpu?: boolean; // Use GPU encoding
+  preset?: "ultrafast" | "fast" | "balanced" | "quality" | "best"; // Encoding preset
 }
 
 export type ShaderType = "vignette" | "bloom" | "chromatic" | "noise" | "crt" | "dreamy";
 
 export interface LayoutConfig {
-  type: "grid" | "custom" | "dynamic";
+  type: "grid" | "custom" | "dynamic" | "masonry" | "treemap" | "pack";
   columns?: number;
   rows?: number;
   gap?: number;

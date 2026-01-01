@@ -269,7 +269,60 @@ async function findNewestFile(dir: string): Promise<string> {
   return newestFile;
 }
 
-export async function downloadMultiple(urls: string[], outputDir?: string): Promise<DownloadResult[]> {
+export interface DownloadMultipleOptions {
+  urls: string[];
+  outputDir?: string;
+  maxHeight?: number;
+  concurrency?: number;
+}
+
+/**
+ * Download multiple URLs with configurable concurrency.
+ * Default concurrency is 3 for balanced speed and system load.
+ */
+export async function downloadMultiple(
+  urls: string[],
+  outputDir?: string,
+  concurrency: number = 3
+): Promise<DownloadResult[]> {
+  const results: DownloadResult[] = new Array(urls.length);
+  let completed = 0;
+
+  // Process in concurrent batches
+  const processBatch = async (startIndex: number): Promise<void> => {
+    const batch = urls.slice(startIndex, startIndex + concurrency);
+    const promises = batch.map(async (url, i) => {
+      const index = startIndex + i;
+      const result = await downloadMedia({
+        url,
+        outputDir,
+        maxHeight: 1080,
+      });
+      results[index] = result;
+      completed++;
+      if (result.success) {
+        console.log(`[${completed}/${urls.length}] Downloaded: ${result.title}`);
+      } else {
+        console.error(`[${completed}/${urls.length}] Failed: ${result.error}`);
+      }
+      return result;
+    });
+    await Promise.all(promises);
+  };
+
+  console.log(`Downloading ${urls.length} item(s) with concurrency ${concurrency}...\n`);
+
+  for (let i = 0; i < urls.length; i += concurrency) {
+    await processBatch(i);
+  }
+
+  return results;
+}
+
+/**
+ * Legacy single-threaded download for backwards compatibility
+ */
+export async function downloadMultipleSequential(urls: string[], outputDir?: string): Promise<DownloadResult[]> {
   const results: DownloadResult[] = [];
 
   for (let i = 0; i < urls.length; i++) {
