@@ -2,17 +2,21 @@
 
 A terminal-based utility for downloading videos and creating video collages. Perfect for creating animated wallpapers or visual reminders from your favorite content.
 
+<div align="center">
+
 ## Demo
 
-![Video Collage Demo](assets/collage-preview.gif)
+<img src="assets/collage-preview.gif" alt="Video Collage Demo" width="720">
 
 *Dynamic layout with 12 videos - generated with `--gpu` hybrid mode*
+
+</div>
 
 ## Features
 
 - Download videos from YouTube, Twitter, TikTok, and 1000+ sites
 - **5 layout algorithms**: dynamic, grid, masonry, treemap, pack
-- **Full GPU acceleration** with NVIDIA CUDA (RTX support)
+- **GPU acceleration** with NVIDIA NVENC (hybrid mode)
 - Parallel media processing and concurrent downloads
 - Auto-looping for seamless playback
 - Shader effects (vignette, bloom, CRT, etc.)
@@ -30,88 +34,32 @@ curl -fsSL https://bun.sh/install | bash
 
 # Install yt-dlp
 pip install yt-dlp
-
-# Optional: Install gallery-dl for additional site support
-pip install gallery-dl
 ```
 
 **Requirements:**
 - [Bun](https://bun.sh) - JavaScript runtime
-- [FFmpeg](https://ffmpeg.org) - Video processing (with CUDA support for GPU acceleration)
+- [FFmpeg](https://ffmpeg.org) - Video processing (with NVENC for GPU acceleration)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Video downloading
 
 ## Usage
 
-### Quick Start
+<div align="center">
 
-```bash
-# Download videos
-bun run src/index.ts download https://youtube.com/watch?v=xxx
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-1.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/frame-1.svg">
+  <img alt="Download Command" src="assets/frame-1.svg" width="600">
+</picture>
 
-# Generate collage
-bun run src/index.ts generate
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-2.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/frame-2.svg">
+  <img alt="Generate Command" src="assets/frame-2.svg" width="600">
+</picture>
 
-# GPU acceleration (NVIDIA) - recommended
-bun run src/index.ts generate --gpu
-```
+</div>
 
-### Download Command
-
-```bash
-bun run src/index.ts download [options] <url1> [url2] ...
-
-Options:
-  -o, --output <dir>      Output directory (default: ./media)
-  --max-height <pixels>   Maximum video height (default: 1080)
-  --concurrency <n>       Parallel downloads (default: 3)
-  --generate              Generate collage after downloading
-```
-
-### Generate Command
-
-```bash
-bun run src/index.ts generate [options]
-
-Options:
-  -o, --output <path>     Output video (default: collage.mp4)
-  -w, --width <pixels>    Output width (default: 1920)
-  -h, --height <pixels>   Output height (default: 1080)
-  -t, --duration <secs>   Duration in seconds (default: 60)
-  --layout <type>         Layout algorithm (see below)
-  --gap <pixels>          Gap between cells (default: 0)
-  --shader <name>         Apply shader effect
-  --preset <name>         Encoding preset
-  --gpu                   Hybrid: CPU filters + NVENC (recommended)
-  --gpu-experimental      Full CUDA pipeline (unreliable)
-```
-
-### List Command
-
-```bash
-bun run src/index.ts list
-```
-
-## Architecture
-
-### Project Structure
-
-```
-video-collage-cli/
-├── src/
-│   ├── index.ts        CLI entry point and command routing
-│   ├── ffmpeg.ts       Video processing and FFmpeg integration
-│   ├── layout.ts       Layout algorithms (5 modes)
-│   ├── downloader.ts   Media downloading with concurrency
-│   ├── config.ts       Configuration loading
-│   └── types.ts        TypeScript type definitions
-├── shaders/            GLSL shader effects
-├── media/              Downloaded media storage
-└── README.md
-```
-
-### Layout Engine
-
-The layout engine (`src/layout.ts`) provides 5 algorithms for positioning media:
+### Layout Algorithms
 
 | Layout | Description | Best For |
 |--------|-------------|----------|
@@ -122,69 +70,55 @@ The layout engine (`src/layout.ts`) provides 5 algorithms for positioning media:
 | `pack` | Bin-packing with shelf algorithm | Mixed sizes |
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  DYNAMIC LAYOUT                                         │
-│  ┌──────────────┐┌──────────────┐┌──────────────┐      │
-│  │   16:9       ││    16:9      ││    16:9      │      │
-│  └──────────────┘└──────────────┘└──────────────┘      │
-│  ┌────────────────────┐┌────────────────────┐          │
-│  │       4:3          ││        4:3         │          │
-│  └────────────────────┘└────────────────────┘          │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│  TREEMAP LAYOUT                                         │
-│  ┌─────────────────────────┐┌──────────────────┐       │
-│  │                         ││                  │       │
-│  │         Large           ││     Medium       │       │
-│  │                         │├────────┬─────────┤       │
-│  ├─────────────────────────┤│  Small │  Small  │       │
-│  │         Medium          ││        │         │       │
-│  └─────────────────────────┘└────────┴─────────┘       │
-└─────────────────────────────────────────────────────────┘
+DYNAMIC LAYOUT                          TREEMAP LAYOUT
+┌────────┐┌────────┐┌────────┐          ┌──────────────┐┌────────┐
+│  16:9  ││  16:9  ││  16:9  │          │              ││ Medium │
+└────────┘└────────┘└────────┘          │    Large     │├───┬────┤
+┌───────────┐┌───────────┐              │              ││ S │ S  │
+│    4:3    ││    4:3    │              ├──────────────┤└───┴────┘
+└───────────┘└───────────┘              │    Medium    │
 ```
 
-### GPU Pipeline
+## Configuration
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-3.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/frame-3.svg">
+  <img alt="JSON Configuration" src="assets/frame-3.svg" width="600">
+</picture>
+
+</div>
+
+## Workflow
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-4.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/frame-4.svg">
+  <img alt="Workflow Example" src="assets/frame-4.svg" width="600">
+</picture>
+
+</div>
+
+## GPU Acceleration
 
 The tool supports three processing modes:
 
+| Mode | Flag | Description |
+|------|------|-------------|
+| CPU | (default) | Software encoding with x264 |
+| **Hybrid** | `--gpu` | CPU filters + NVENC encoding (recommended) |
+| Experimental | `--gpu-experimental` | Full CUDA pipeline (unreliable) |
+
+**Hybrid mode** is recommended - it uses proven CPU filters for scaling and compositing, while offloading the computationally expensive encoding to NVENC. This provides significant speedup without instability.
+
+```bash
+# Check NVENC support
+ffmpeg -hide_banner -encoders | grep nvenc
 ```
-CPU Mode (default):
-  Input -> [CPU decode] -> [CPU filters] -> [x264 encode] -> Output
-
-Hybrid Mode (--gpu) - RECOMMENDED:
-  Input -> [CPU decode] -> [CPU filters] -> [NVENC encode] -> Output
-                                                  ^
-                              Fast, reliable GPU encoding
-
-Experimental (--gpu-experimental) - UNRELIABLE:
-  Input -> [CPU decode] -> [hwupload_cuda] -> [CUDA filters] -> [NVENC] -> Output
-                                                  ^
-                              May fail with "Function not implemented"
-```
-
-**Why Hybrid Mode?**
-
-CUDA filters (`scale_cuda`, `overlay_cuda`) are unreliable on consumer GPUs. They may fail with cryptic errors like "Function not implemented" even when FFmpeg reports CUDA support. Hybrid mode avoids this by using proven CPU filters for scaling and compositing, while offloading the computationally expensive encoding step to NVENC. This provides significant speedup without the instability.
-
-**Filter Chain (Hybrid Mode):**
-```
-Background:  color=black:1920x1080 -> [bg]
-
-Videos:      [input] -> loop -> scale -> trim -> setpts -> [v0]
-
-Composite:   [bg][v0]overlay -> [v1]overlay -> ... -> [out]
-
-Encode:      [out] -> h264_nvenc (GPU) -> output.mp4
-```
-
-### Performance Features
-
-1. **Parallel FFprobe**: Media info fetched for 8 files concurrently
-2. **Concurrent Downloads**: Configurable parallelism (default: 3)
-3. **Batch Processing**: Large collections split into batches of 6
-4. **NVENC Presets**: p1 (fastest) to p7 (best quality)
-5. **Multi-threaded CPU**: Auto-detects optimal thread count
 
 ### Encoding Presets
 
@@ -198,8 +132,6 @@ Encode:      [out] -> h264_nvenc (GPU) -> output.mp4
 
 ### Shader Effects
 
-Applied as FFmpeg filter chains after compositing:
-
 | Shader | Description |
 |--------|-------------|
 | `vignette` | Darkens frame edges |
@@ -209,50 +141,6 @@ Applied as FFmpeg filter chains after compositing:
 | `crt` | CRT monitor + scanlines |
 | `dreamy` | Soft ethereal glow |
 
-## Examples
-
-```bash
-# Treemap layout with gap
-bun run src/index.ts generate --layout treemap --gap 4
-
-# Masonry with 4 columns
-bun run src/index.ts generate --layout masonry --columns 4
-
-# GPU acceleration with quality preset
-bun run src/index.ts generate --gpu --preset quality
-
-# CRT shader effect
-bun run src/index.ts generate --shader crt
-
-# 4K output with fast encoding
-bun run src/index.ts generate -w 3840 -h 2160 --preset fast
-```
-
-## Configuration
-
-JSON configuration for complex setups:
-
-```json
-{
-  "output": "collage.mp4",
-  "width": 1920,
-  "height": 1080,
-  "duration": 60,
-  "fps": 30,
-  "layout": {
-    "type": "dynamic",
-    "gap": 4
-  },
-  "shader": "vignette",
-  "gpu": true,
-  "preset": "balanced",
-  "media": [
-    { "path": "video1.mp4", "type": "video" },
-    { "path": "image1.jpg", "type": "image" }
-  ]
-}
-```
-
 ## Supported Formats
 
 **Videos:** mp4, mkv, avi, mov, webm, flv, wmv, m4v
@@ -261,36 +149,7 @@ JSON configuration for complex setups:
 
 ## Supported Platforms
 
-yt-dlp supports 1000+ sites including:
-- YouTube
-- Twitter/X
-- TikTok
-- Instagram (requires auth)
-- Reddit
-- Vimeo
-- Twitch
-- And many more...
-
-## GPU Requirements
-
-For `--gpu` (hybrid mode, recommended):
-- NVIDIA GPU with NVENC support
-- FFmpeg compiled with NVENC (`h264_nvenc`)
-- Works reliably on all modern NVIDIA GPUs
-
-For `--gpu-experimental` (full CUDA, unreliable):
-- FFmpeg compiled with NVENC and CUDA filters
-- May fail with "Function not implemented" on many GPUs
-- Falls back to hybrid mode automatically on failure
-
-Check GPU support:
-```bash
-# Check NVENC (required for --gpu)
-ffmpeg -hide_banner -encoders | grep nvenc
-
-# Check CUDA filters (required for --gpu-experimental)
-ffmpeg -hide_banner -filters | grep cuda
-```
+yt-dlp supports 1000+ sites including YouTube, Twitter/X, TikTok, Instagram, Reddit, Vimeo, Twitch, and many more.
 
 ## License
 
@@ -298,4 +157,4 @@ MIT
 
 ---
 
-**Note:** To regenerate the README frames, run `make readme`. This requires [Typst](https://typst.app).
+*To regenerate the README frames, run `make readme`. Requires [Typst](https://typst.app).*
