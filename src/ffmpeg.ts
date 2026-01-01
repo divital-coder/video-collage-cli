@@ -358,6 +358,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     for (let i = 0; i < batches.length; i++) {
       console.log(`\nBatch ${i + 1}/${batches.length}...`);
       const tempOutput = `temp_collage_${i}_${Date.now()}.mp4`;
+      const batchMedia = batches[i]!;
       const batchConfig: CollageConfig = {
         output: tempOutput,
         width,
@@ -368,7 +369,7 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
         gpu,
         gpuExperimental,
         layout,
-        media: batches[i],
+        media: batchMedia,
       };
       await generateCollage(batchConfig);
       const tempInfo = await getMediaInfo(tempOutput);

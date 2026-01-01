@@ -120,7 +120,7 @@ async function downloadWithYtDlp(
         if (done) break;
         const text = decoder.decode(value);
         const match = text.match(/Destination: (.+)/);
-        if (match) downloadedFile = match[1].trim();
+        if (match?.[1]) downloadedFile = match[1].trim();
       }
     };
 
@@ -137,9 +137,9 @@ async function downloadWithYtDlp(
             process.stdout.write(`\r${line.trim().slice(0, 80).padEnd(80)}`);
           }
           const destMatch = line.match(/Destination: (.+)/);
-          if (destMatch) downloadedFile = destMatch[1].trim();
+          if (destMatch?.[1]) downloadedFile = destMatch[1].trim();
           const mergeMatch = line.match(/Merging formats into "(.+)"/);
-          if (mergeMatch) downloadedFile = mergeMatch[1].trim();
+          if (mergeMatch?.[1]) downloadedFile = mergeMatch[1].trim();
         }
       }
     };
@@ -326,9 +326,10 @@ export async function downloadMultipleSequential(urls: string[], outputDir?: str
   const results: DownloadResult[] = [];
 
   for (let i = 0; i < urls.length; i++) {
+    const url = urls[i]!;
     console.log(`\n[${i + 1}/${urls.length}] Downloading...`);
     const result = await downloadMedia({
-      url: urls[i],
+      url,
       outputDir,
       maxHeight: 1080,
     });

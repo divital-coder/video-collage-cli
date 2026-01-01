@@ -31,9 +31,9 @@ describe("Layout Engine", () => {
 
     test("positions cells correctly with gap", () => {
       const positions = calculateGridLayout(4, 1000, 1000, 2, 2, 10);
-      expect(positions[0].x).toBe(10); // First cell starts after gap
-      expect(positions[0].y).toBe(10);
-      expect(positions[1].x).toBeGreaterThan(positions[0].x); // Second cell to the right
+      expect(positions[0]!.x).toBe(10); // First cell starts after gap
+      expect(positions[0]!.y).toBe(10);
+      expect(positions[1]!.x).toBeGreaterThan(positions[0]!.x); // Second cell to the right
     });
 
     test("all cells have positive dimensions", () => {
@@ -55,8 +55,8 @@ describe("Layout Engine", () => {
       const items = createItems(1, 16 / 9);
       const positions = calculateDynamicLayout(items, 1920, 1080, 0);
       expect(positions).toHaveLength(1);
-      expect(positions[0].width).toBeGreaterThan(0);
-      expect(positions[0].height).toBeGreaterThan(0);
+      expect(positions[0]!.width).toBeGreaterThan(0);
+      expect(positions[0]!.height).toBeGreaterThan(0);
     });
 
     test("multiple items create valid positions", () => {
@@ -122,8 +122,8 @@ describe("Layout Engine", () => {
       const items = createItems(1);
       const positions = calculateTreemapLayout(items, 1920, 1080, 0);
       expect(positions).toHaveLength(1);
-      expect(positions[0].width).toBeGreaterThan(1000);
-      expect(positions[0].height).toBeGreaterThan(500);
+      expect(positions[0]!.width).toBeGreaterThan(1000);
+      expect(positions[0]!.height).toBeGreaterThan(500);
     });
 
     test("all items get valid positions", () => {
@@ -224,10 +224,10 @@ describe("Layout Engine", () => {
 
       const clamped = clampPositions(positions, 1920, 1080);
 
-      expect(clamped[0].x).toBe(0);
-      expect(clamped[0].y).toBe(0);
-      expect(clamped[1].x + clamped[1].width).toBeLessThanOrEqual(1920);
-      expect(clamped[1].y + clamped[1].height).toBeLessThanOrEqual(1080);
+      expect(clamped[0]!.x).toBe(0);
+      expect(clamped[0]!.y).toBe(0);
+      expect(clamped[1]!.x + clamped[1]!.width).toBeLessThanOrEqual(1920);
+      expect(clamped[1]!.y + clamped[1]!.height).toBeLessThanOrEqual(1080);
     });
 
     test("preserves valid positions", () => {
@@ -237,10 +237,10 @@ describe("Layout Engine", () => {
 
       const clamped = clampPositions(positions, 1920, 1080);
 
-      expect(clamped[0].x).toBe(100);
-      expect(clamped[0].y).toBe(100);
-      expect(clamped[0].width).toBe(200);
-      expect(clamped[0].height).toBe(200);
+      expect(clamped[0]!.x).toBe(100);
+      expect(clamped[0]!.y).toBe(100);
+      expect(clamped[0]!.width).toBe(200);
+      expect(clamped[0]!.height).toBe(200);
     });
   });
 });

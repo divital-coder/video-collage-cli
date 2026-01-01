@@ -104,7 +104,7 @@ export function calculateDynamicLayout(
 
   if (items.length === 1) {
     // Single item fills the canvas while preserving aspect ratio
-    const item = items[0];
+    const item = items[0]!;
     const canvasAspect = canvasWidth / canvasHeight;
     let width: number, height: number, x: number, y: number;
 
@@ -156,7 +156,7 @@ export function calculateDynamicLayout(
     let currentX = gap;
 
     for (let i = 0; i < row.length; i++) {
-      const item = row[i];
+      const item = row[i]!;
       // Last item in row takes remaining space to avoid gaps
       const isLast = i === row.length - 1;
       const cellWidth = isLast
@@ -214,9 +214,10 @@ function partitionIntoRows(
     // Distribute orphaned items
     if (currentRow.length === 1 && rows.length > 0) {
       // Move to previous row if it would look better
-      const prevRow = rows[rows.length - 1];
+      const prevRow = rows[rows.length - 1]!;
+      const orphanItem = currentRow[0]!;
       if (prevRow.length <= targetItemsPerRow + 1) {
-        prevRow.push(currentRow[0]);
+        prevRow.push(orphanItem);
       } else {
         rows.push(currentRow);
       }
@@ -254,14 +255,15 @@ export function calculateMasonryLayout(
     let minHeight = Infinity;
     let targetCol = 0;
     for (let c = 0; c < cols; c++) {
-      if (colHeights[c] < minHeight) {
-        minHeight = colHeights[c];
+      const colHeight = colHeights[c] ?? gap;
+      if (colHeight < minHeight) {
+        minHeight = colHeight;
         targetCol = c;
       }
     }
 
     const x = gap + targetCol * (colWidth + gap);
-    const y = colHeights[targetCol];
+    const y = colHeights[targetCol] ?? gap;
     const height = Math.floor(colWidth / item.aspect);
 
     positions.push({
@@ -272,7 +274,7 @@ export function calculateMasonryLayout(
       mediaIndex: item.index,
     });
 
-    colHeights[targetCol] += height + gap;
+    colHeights[targetCol] = (colHeights[targetCol] ?? gap) + height + gap;
   }
 
   // Scale to fit canvas height if needed
@@ -349,7 +351,7 @@ function squarify(
       y: Math.floor(rect.y),
       width: Math.floor(rect.width),
       height: Math.floor(rect.height),
-      mediaIndex: items[0].index,
+      mediaIndex: items[0]!.index,
     }];
   }
 
@@ -418,13 +420,15 @@ function layoutRow(
   if (items.length === 0) return { row: [], rest: [] };
   if (items.length === 1) return { row: items, rest: [] };
 
-  const row: LayoutItem[] = [items[0]];
-  let rowArea = items[0].area!;
+  const firstItem = items[0]!;
+  const row: LayoutItem[] = [firstItem];
+  let rowArea = firstItem.area!;
   let bestAspect = worstAspectRatio(row, side);
 
   for (let i = 1; i < items.length; i++) {
-    const testRow = [...row, items[i]];
-    const testArea = rowArea + items[i].area!;
+    const currentItem = items[i]!;
+    const testRow = [...row, currentItem];
+    const testArea = rowArea + currentItem.area!;
     const testAspect = worstAspectRatio(testRow, side);
 
     if (testAspect > bestAspect) {
@@ -432,7 +436,7 @@ function layoutRow(
       break;
     }
 
-    row.push(items[i]);
+    row.push(currentItem);
     rowArea = testArea;
     bestAspect = testAspect;
   }
@@ -510,9 +514,10 @@ export function calculatePackLayout(
 
     // Create new shelf
     if (!placed) {
+      const lastShelf = shelves[shelves.length - 1];
       const shelfY = shelves.length === 0
         ? gap
-        : shelves[shelves.length - 1].y + shelves[shelves.length - 1].height + gap;
+        : lastShelf!.y + lastShelf!.height + gap;
 
       shelves.push({
         y: shelfY,

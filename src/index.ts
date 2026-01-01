@@ -347,13 +347,14 @@ async function runList() {
 
 async function main() {
   const args = Bun.argv.slice(2);
-  const command = args[0];
 
   // No args - show help
   if (args.length === 0) {
     console.log(HELP);
     process.exit(0);
   }
+
+  const command = args[0]!;
 
   // Route to command
   switch (command) {
