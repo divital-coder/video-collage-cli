@@ -247,6 +247,7 @@ function buildCpuFilterComplex(
 /**
  * Build full CUDA GPU filter complex
  * Uses scale_cuda and overlay_cuda for GPU-accelerated processing
+ * Downloads to CPU before encoding for maximum compatibility
  */
 function buildCudaFilterComplex(
   media: MediaItem[],
@@ -257,9 +258,9 @@ function buildCudaFilterComplex(
   const filterParts: string[] = [];
 
   // Create background and upload to CUDA
-  // Note: We create the background in CPU, convert to nv12, then upload to CUDA
+  // Use yuv420p format for better compatibility
   filterParts.push(
-    `color=c=${background}:s=${width}x${height}:d=${duration}:r=${fps},format=nv12,hwupload_cuda[bg_cuda]`
+    `color=c=${background}:s=${width}x${height}:d=${duration}:r=${fps},format=yuv420p,hwupload_cuda[bg_cuda]`
   );
 
   for (let i = 0; i < media.length; i++) {
@@ -272,16 +273,14 @@ function buildCudaFilterComplex(
 
     if (item.type === "image") {
       // Images: loop, scale on CPU first (for lanczos quality), then upload to CUDA
-      // For images we keep CPU scaling for better quality, then upload
       filterParts.push(
-        `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:flags=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS,format=nv12,hwupload_cuda${scaledLabel}`
+        `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:flags=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS,format=yuv420p,hwupload_cuda${scaledLabel}`
       );
     } else {
       // Videos: CPU filters first (loop, trim, setpts), then upload to CUDA for scaling
-      // Order matters: CPU filters -> format -> hwupload -> scale_cuda
       const loopFilter = item.loop !== false ? `loop=loop=-1:size=10000:start=0,` : "";
       filterParts.push(
-        `${inputLabel}${loopFilter}trim=duration=${duration},setpts=PTS-STARTPTS,format=nv12,hwupload_cuda,scale_cuda=${pos.width}:${pos.height}:interp_algo=lanczos${scaledLabel}`
+        `${inputLabel}${loopFilter}trim=duration=${duration},setpts=PTS-STARTPTS,format=yuv420p,hwupload_cuda,scale_cuda=${pos.width}:${pos.height}${scaledLabel}`
       );
     }
   }
@@ -295,11 +294,7 @@ function buildCudaFilterComplex(
     if (!pos) continue;
 
     const isLast = i === sortedPositions.length - 1;
-    // For last overlay, if shader is specified we need to download from GPU first
-    // Otherwise output stays in CUDA for nvenc
-    const outputLabel = isLast
-      ? (shader ? "[pre_shader_cuda]" : "[out_cuda]")
-      : `[tmp${i}_cuda]`;
+    const outputLabel = isLast ? "[composite_cuda]" : `[tmp${i}_cuda]`;
 
     filterParts.push(
       `${lastLabel}[v${pos.mediaIndex}_cuda]overlay_cuda=x=${pos.x}:y=${pos.y}${outputLabel}`
@@ -307,13 +302,17 @@ function buildCudaFilterComplex(
     lastLabel = outputLabel;
   }
 
-  // Apply shader effect if specified (shaders run on CPU, so we need to download)
+  // Always download from CUDA to CPU for encoding compatibility
+  // This ensures NVENC gets a format it can handle
   if (shader && AVAILABLE_SHADERS.includes(shader as ShaderType)) {
     const shaderFilter = getShaderFilter(shader as ShaderType, width, height);
     if (shaderFilter) {
-      // Download from CUDA, apply shader on CPU, then re-upload for encoding
-      filterParts.push(`[pre_shader_cuda]hwdownload,format=nv12,${shaderFilter},format=nv12,hwupload_cuda[out_cuda]`);
+      filterParts.push(`[composite_cuda]hwdownload,format=yuv420p,${shaderFilter}[out]`);
+    } else {
+      filterParts.push(`[composite_cuda]hwdownload,format=yuv420p[out]`);
     }
+  } else {
+    filterParts.push(`[composite_cuda]hwdownload,format=yuv420p[out]`);
   }
 
   return { filterParts, sortedPositions };
@@ -444,8 +443,8 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
   args.push(...inputs);
   args.push("-filter_complex", filterComplex);
 
-  // Map output - for CUDA filters the output is [out_cuda], otherwise [out]
-  args.push("-map", useCudaFilters ? "[out_cuda]" : "[out]");
+  // Map output - always [out] now (CUDA filters download to CPU before output)
+  args.push("-map", "[out]");
 
   // Encoder settings
   if (useFullGpu) {
