@@ -48,13 +48,13 @@ pip install yt-dlp
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-1.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/frame-1.svg">
-  <img alt="Download Command" src="assets/frame-1.svg" width="600">
+  <img alt="Download Command" src="assets/frame-1.svg" width="800">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-2.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/frame-2.svg">
-  <img alt="Generate Command" src="assets/frame-2.svg" width="600">
+  <img alt="Generate Command" src="assets/frame-2.svg" width="800">
 </picture>
 
 </div>
@@ -86,7 +86,7 @@ DYNAMIC LAYOUT                          TREEMAP LAYOUT
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-3.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/frame-3.svg">
-  <img alt="JSON Configuration" src="assets/frame-3.svg" width="600">
+  <img alt="JSON Configuration" src="assets/frame-3.svg" width="800">
 </picture>
 
 </div>
@@ -98,7 +98,7 @@ DYNAMIC LAYOUT                          TREEMAP LAYOUT
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/frame-dark-4.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/frame-4.svg">
-  <img alt="Workflow Example" src="assets/frame-4.svg" width="600">
+  <img alt="Workflow Example" src="assets/frame-4.svg" width="800">
 </picture>
 
 </div>
