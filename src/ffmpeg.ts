@@ -277,11 +277,11 @@ function buildCudaFilterComplex(
         `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:flags=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS,format=nv12,hwupload_cuda${scaledLabel}`
       );
     } else {
-      // Videos: use CUDA scaling (scale_cuda)
-      // Input is already in CUDA memory from hwaccel, scale directly on GPU
+      // Videos: CPU filters first (loop, trim, setpts), then upload to CUDA for scaling
+      // Order matters: CPU filters -> format -> hwupload -> scale_cuda
       const loopFilter = item.loop !== false ? `loop=loop=-1:size=10000:start=0,` : "";
       filterParts.push(
-        `${inputLabel}${loopFilter}format=nv12,hwupload_cuda,scale_cuda=${pos.width}:${pos.height}:interp_algo=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
+        `${inputLabel}${loopFilter}trim=duration=${duration},setpts=PTS-STARTPTS,format=nv12,hwupload_cuda,scale_cuda=${pos.width}:${pos.height}:interp_algo=lanczos${scaledLabel}`
       );
     }
   }
@@ -511,8 +511,16 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
 
     if (proc.exitCode !== 0) {
       // Check for common CUDA errors
-      if (errorOutput.includes("cuda") || errorOutput.includes("CUDA")) {
-        console.error("\n\nCUDA error detected. Falling back to CPU...");
+      if (useCudaFilters && (errorOutput.includes("cuda") || errorOutput.includes("CUDA") || errorOutput.includes("hwupload") || errorOutput.includes("No NVENC"))) {
+        // Extract the actual error for debugging
+        const errorLines = errorOutput.split("\n").filter(l =>
+          l.includes("Error") || l.includes("error") || l.includes("Cannot") || l.includes("Invalid")
+        );
+        console.error("\n\nCUDA error detected:");
+        if (errorLines.length > 0) {
+          console.error(errorLines.slice(-3).join("\n"));
+        }
+        console.error("Falling back to CPU...\n");
         // Retry with CPU
         const cpuConfig = { ...config, gpu: false, gpuFull: false };
         return generateCollage(cpuConfig);
