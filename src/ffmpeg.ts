@@ -18,6 +18,15 @@ export const ENCODING_PRESETS = {
   best: { preset: "veryslow", crf: 18 },
 } as const;
 
+// NVENC presets (p1=fastest, p7=slowest/best quality)
+export const NVENC_PRESETS = {
+  ultrafast: { preset: "p1", cq: 30 },
+  fast: { preset: "p2", cq: 26 },
+  balanced: { preset: "p4", cq: 23 },
+  quality: { preset: "p6", cq: 20 },
+  best: { preset: "p7", cq: 18 },
+} as const;
+
 export type EncodingPreset = keyof typeof ENCODING_PRESETS;
 
 // Get FFmpeg filter chain for each shader effect
@@ -161,92 +170,28 @@ export function calculateCustomLayout(media: MediaItem[], canvasWidth: number, c
   });
 }
 
-export async function generateCollage(config: CollageConfig): Promise<void> {
-  const {
-    layout,
-    width,
-    height,
-    duration,
-    fps,
-    output,
-    background = "black",
-    shader,
-    gpu = false,
-    preset = "balanced" as EncodingPreset,
-  } = config;
-  let { media } = config;
-
-  // Prepare media with parallel info fetching
-  console.log("Analyzing media files...");
-  media = await prepareMediaItems(media, duration);
-
-  // If more than 12 media items, process in batches
-  if (media.length > 12) {
-    const batchSize = 6;
-    const batches: MediaItem[][] = [];
-    for (let i = 0; i < media.length; i += batchSize) {
-      batches.push(media.slice(i, i + batchSize));
-    }
-
-    console.log(`Processing ${batches.length} batches of media...`);
-
-    const tempFiles: MediaItem[] = [];
-    for (let i = 0; i < batches.length; i++) {
-      console.log(`\nBatch ${i + 1}/${batches.length}...`);
-      const tempOutput = `temp_collage_${i}_${Date.now()}.mp4`;
-      const batchConfig: CollageConfig = {
-        output: tempOutput,
-        width,
-        height,
-        duration,
-        fps,
-        background,
-        gpu,
-        layout,
-        media: batches[i],
-      };
-      await generateCollage(batchConfig);
-      const tempInfo = await getMediaInfo(tempOutput);
-      tempFiles.push({ path: tempOutput, type: "video", loop: true, info: tempInfo });
-    }
-    media = tempFiles;
+/**
+ * Check if CUDA is available for FFmpeg
+ */
+export async function checkCudaAvailable(): Promise<boolean> {
+  try {
+    const result = await Bun.$`ffmpeg -hide_banner -hwaccels 2>&1`.text();
+    return result.includes("cuda");
+  } catch {
+    return false;
   }
+}
 
-  // Calculate positions using new layout engine
-  let positions: CellPosition[];
-
-  if (layout.type === "custom" && layout.positions) {
-    positions = layout.positions;
-  } else {
-    // Convert media to layout items
-    const layoutItems = media.map((item, index) => mediaToLayoutItem(item.info, index));
-
-    positions = calculateLayout(layoutItems, {
-      type: layout.type as LayoutType,
-      canvasWidth: width,
-      canvasHeight: height,
-      gap: layout.gap || 0,
-      columns: layout.columns,
-      rows: layout.rows,
-    });
-
-    // Ensure positions are within bounds
-    positions = clampPositions(positions, width, height);
-  }
-
-  // Build FFmpeg filter complex
-  const inputs: string[] = [];
+/**
+ * Build CPU-based filter complex (original implementation)
+ */
+function buildCpuFilterComplex(
+  media: MediaItem[],
+  positions: CellPosition[],
+  config: { width: number; height: number; duration: number; fps: number; background: string; shader?: string }
+): { filterParts: string[]; sortedPositions: CellPosition[] } {
+  const { width, height, duration, fps, background, shader } = config;
   const filterParts: string[] = [];
-
-  // Set loop and info for temp collages
-  for (const item of media) {
-    if (item.path.startsWith("temp_collage_")) {
-      item.loop = true;
-      if (!item.info) {
-        item.info = await getMediaInfo(item.path);
-      }
-    }
-  }
 
   // Add background
   filterParts.push(`color=c=${background}:s=${width}x${height}:d=${duration}:r=${fps}[bg]`);
@@ -255,8 +200,6 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     const item = media[i];
     const pos = positions.find(p => p.mediaIndex === i);
     if (!pos || !item) continue;
-
-    inputs.push("-i", item.path);
 
     const inputLabel = `[${i}:v]`;
     const scaledLabel = `[v${i}]`;
@@ -298,35 +241,247 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     }
   }
 
+  return { filterParts, sortedPositions };
+}
+
+/**
+ * Build full CUDA GPU filter complex
+ * Uses scale_cuda and overlay_cuda for GPU-accelerated processing
+ */
+function buildCudaFilterComplex(
+  media: MediaItem[],
+  positions: CellPosition[],
+  config: { width: number; height: number; duration: number; fps: number; background: string; shader?: string }
+): { filterParts: string[]; sortedPositions: CellPosition[] } {
+  const { width, height, duration, fps, background, shader } = config;
+  const filterParts: string[] = [];
+
+  // Create background and upload to CUDA
+  // Note: We create the background in CPU, convert to nv12, then upload to CUDA
+  filterParts.push(
+    `color=c=${background}:s=${width}x${height}:d=${duration}:r=${fps},format=nv12,hwupload_cuda[bg_cuda]`
+  );
+
+  for (let i = 0; i < media.length; i++) {
+    const item = media[i];
+    const pos = positions.find(p => p.mediaIndex === i);
+    if (!pos || !item) continue;
+
+    const inputLabel = `[${i}:v]`;
+    const scaledLabel = `[v${i}_cuda]`;
+
+    if (item.type === "image") {
+      // Images: loop, scale on CPU first (for lanczos quality), then upload to CUDA
+      // For images we keep CPU scaling for better quality, then upload
+      filterParts.push(
+        `${inputLabel}loop=loop=-1:size=1:start=0,setpts=N/FRAME_RATE/TB,scale=${pos.width}:${pos.height}:flags=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS,format=nv12,hwupload_cuda${scaledLabel}`
+      );
+    } else {
+      // Videos: use CUDA scaling (scale_cuda)
+      // Input is already in CUDA memory from hwaccel, scale directly on GPU
+      const loopFilter = item.loop !== false ? `loop=loop=-1:size=10000:start=0,` : "";
+      filterParts.push(
+        `${inputLabel}${loopFilter}format=nv12,hwupload_cuda,scale_cuda=${pos.width}:${pos.height}:interp_algo=lanczos,trim=duration=${duration},setpts=PTS-STARTPTS${scaledLabel}`
+      );
+    }
+  }
+
+  // Build overlay chain using overlay_cuda - sort positions by index
+  const sortedPositions = [...positions].sort((a, b) => a.mediaIndex - b.mediaIndex);
+
+  let lastLabel = "[bg_cuda]";
+  for (let i = 0; i < sortedPositions.length; i++) {
+    const pos = sortedPositions[i];
+    if (!pos) continue;
+
+    const isLast = i === sortedPositions.length - 1;
+    // For last overlay, if shader is specified we need to download from GPU first
+    // Otherwise output stays in CUDA for nvenc
+    const outputLabel = isLast
+      ? (shader ? "[pre_shader_cuda]" : "[out_cuda]")
+      : `[tmp${i}_cuda]`;
+
+    filterParts.push(
+      `${lastLabel}[v${pos.mediaIndex}_cuda]overlay_cuda=x=${pos.x}:y=${pos.y}${outputLabel}`
+    );
+    lastLabel = outputLabel;
+  }
+
+  // Apply shader effect if specified (shaders run on CPU, so we need to download)
+  if (shader && AVAILABLE_SHADERS.includes(shader as ShaderType)) {
+    const shaderFilter = getShaderFilter(shader as ShaderType, width, height);
+    if (shaderFilter) {
+      // Download from CUDA, apply shader on CPU, then re-upload for encoding
+      filterParts.push(`[pre_shader_cuda]hwdownload,format=nv12,${shaderFilter},format=nv12,hwupload_cuda[out_cuda]`);
+    }
+  }
+
+  return { filterParts, sortedPositions };
+}
+
+export async function generateCollage(config: CollageConfig): Promise<void> {
+  const {
+    layout,
+    width,
+    height,
+    duration,
+    fps,
+    output,
+    background = "black",
+    shader,
+    gpu = false,
+    gpuFull = false,
+    preset = "balanced" as EncodingPreset,
+  } = config;
+  let { media } = config;
+
+  // Check if full GPU mode is requested
+  const useFullGpu = gpuFull || gpu;
+  const useCudaFilters = gpuFull; // Only use CUDA filters if explicitly requested
+
+  // Prepare media with parallel info fetching
+  console.log("Analyzing media files...");
+  media = await prepareMediaItems(media, duration);
+
+  // If more than 12 media items, process in batches
+  if (media.length > 12) {
+    const batchSize = 6;
+    const batches: MediaItem[][] = [];
+    for (let i = 0; i < media.length; i += batchSize) {
+      batches.push(media.slice(i, i + batchSize));
+    }
+
+    console.log(`Processing ${batches.length} batches of media...`);
+
+    const tempFiles: MediaItem[] = [];
+    for (let i = 0; i < batches.length; i++) {
+      console.log(`\nBatch ${i + 1}/${batches.length}...`);
+      const tempOutput = `temp_collage_${i}_${Date.now()}.mp4`;
+      const batchConfig: CollageConfig = {
+        output: tempOutput,
+        width,
+        height,
+        duration,
+        fps,
+        background,
+        gpu,
+        gpuFull,
+        layout,
+        media: batches[i],
+      };
+      await generateCollage(batchConfig);
+      const tempInfo = await getMediaInfo(tempOutput);
+      tempFiles.push({ path: tempOutput, type: "video", loop: true, info: tempInfo });
+    }
+    media = tempFiles;
+  }
+
+  // Calculate positions using new layout engine
+  let positions: CellPosition[];
+
+  if (layout.type === "custom" && layout.positions) {
+    positions = layout.positions;
+  } else {
+    // Convert media to layout items
+    const layoutItems = media.map((item, index) => mediaToLayoutItem(item.info, index));
+
+    positions = calculateLayout(layoutItems, {
+      type: layout.type as LayoutType,
+      canvasWidth: width,
+      canvasHeight: height,
+      gap: layout.gap || 0,
+      columns: layout.columns,
+      rows: layout.rows,
+    });
+
+    // Ensure positions are within bounds
+    positions = clampPositions(positions, width, height);
+  }
+
+  // Build inputs array
+  const inputs: string[] = [];
+  for (let i = 0; i < media.length; i++) {
+    const item = media[i];
+    const pos = positions.find(p => p.mediaIndex === i);
+    if (!pos || !item) continue;
+    inputs.push("-i", item.path);
+  }
+
+  // Set loop and info for temp collages
+  for (const item of media) {
+    if (item.path.startsWith("temp_collage_")) {
+      item.loop = true;
+      if (!item.info) {
+        item.info = await getMediaInfo(item.path);
+      }
+    }
+  }
+
+  // Build filter complex based on GPU mode
+  const filterConfig = { width, height, duration, fps, background, shader };
+  const { filterParts } = useCudaFilters
+    ? buildCudaFilterComplex(media, positions, filterConfig)
+    : buildCpuFilterComplex(media, positions, filterConfig);
+
   const filterComplex = filterParts.join(";");
 
-  // Get encoding settings
-  const encodingSettings = ENCODING_PRESETS[preset] || ENCODING_PRESETS.balanced;
+  // Get encoding settings based on GPU mode
+  const cpuSettings = ENCODING_PRESETS[preset] || ENCODING_PRESETS.balanced;
+  const gpuSettings = NVENC_PRESETS[preset] || NVENC_PRESETS.balanced;
 
   // Build FFmpeg command with optimized settings
-  const args = [
-    "-y",
-    ...(gpu ? ["-hwaccel", "cuda"] : []),
-    ...inputs,
-    "-filter_complex", filterComplex,
-    "-map", "[out]",
-    "-c:v", gpu ? "h264_nvenc" : "libx264",
-    "-preset", gpu ? "p4" : encodingSettings.preset,
-    gpu ? "-cq" : "-crf", String(encodingSettings.crf),
+  const args: string[] = ["-y"];
+
+  // Hardware acceleration for decoding (when using GPU)
+  if (useFullGpu) {
+    args.push("-hwaccel", "cuda");
+    if (!useCudaFilters) {
+      // If not using CUDA filters, we still want fast decoding
+      args.push("-hwaccel_output_format", "cuda");
+    }
+  }
+
+  args.push(...inputs);
+  args.push("-filter_complex", filterComplex);
+
+  // Map output - for CUDA filters the output is [out_cuda], otherwise [out]
+  args.push("-map", useCudaFilters ? "[out_cuda]" : "[out]");
+
+  // Encoder settings
+  if (useFullGpu) {
+    args.push(
+      "-c:v", "h264_nvenc",
+      "-preset", gpuSettings.preset,
+      "-cq", String(gpuSettings.cq),
+      "-b:v", "0", // Use CQ mode (constant quality)
+      "-rc", "vbr", // Variable bitrate for better quality
+    );
+  } else {
+    args.push(
+      "-c:v", "libx264",
+      "-preset", cpuSettings.preset,
+      "-crf", String(cpuSettings.crf),
+      "-threads", "0", // Auto-detect threads
+    );
+  }
+
+  args.push(
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
     "-t", String(duration),
     "-r", String(fps),
-    ...(gpu ? [] : ["-threads", "0"]), // Auto-detect threads for CPU encoding
     output,
-  ];
+  );
 
+  // Log configuration
   console.log("\nGenerating collage...");
   console.log(`Output: ${output}`);
   console.log(`Resolution: ${width}x${height}`);
   console.log(`Duration: ${duration}s @ ${fps}fps`);
   console.log(`Layout: ${layout.type}`);
   console.log(`Media items: ${media.length}`);
+  console.log(`GPU: ${useCudaFilters ? "Full CUDA pipeline" : useFullGpu ? "NVENC encoding" : "CPU"}`);
+  console.log(`Preset: ${preset}`);
   if (shader) {
     console.log(`Shader: ${shader}`);
   }
@@ -340,11 +495,13 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
 
     const decoder = new TextDecoder();
     const reader = proc.stderr.getReader();
+    let errorOutput = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       const text = decoder.decode(value);
+      errorOutput += text;
       if (text.includes("frame=") || text.includes("time=")) {
         process.stdout.write(`\r${text.trim().slice(0, 80)}`);
       }
@@ -353,7 +510,14 @@ export async function generateCollage(config: CollageConfig): Promise<void> {
     await proc.exited;
 
     if (proc.exitCode !== 0) {
-      throw new Error(`FFmpeg exited with code ${proc.exitCode}`);
+      // Check for common CUDA errors
+      if (errorOutput.includes("cuda") || errorOutput.includes("CUDA")) {
+        console.error("\n\nCUDA error detected. Falling back to CPU...");
+        // Retry with CPU
+        const cpuConfig = { ...config, gpu: false, gpuFull: false };
+        return generateCollage(cpuConfig);
+      }
+      throw new Error(`FFmpeg exited with code ${proc.exitCode}\n${errorOutput.slice(-500)}`);
     }
 
     // Clean up temp files

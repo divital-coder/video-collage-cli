@@ -54,7 +54,8 @@ OPTIONS:
   --bg <color>            Background color (default: black)
   --shader <name>         Apply shader effect to output
   --preset <name>         Encoding preset (see PRESETS below)
-  --gpu                   Use GPU encoding (default: false)
+  --gpu                   Use NVENC GPU encoding only
+  --gpu-full              Full CUDA pipeline (decode + filters + encode on GPU)
   --init                  Generate sample config file
   --help                  Show this help
 
@@ -71,6 +72,12 @@ PRESETS:
   balanced    Default - balanced speed/quality
   quality     Slower encoding, better quality
   best        Slowest, best quality
+
+GPU MODES:
+  --gpu       NVENC encoding only (CPU filters, GPU encode)
+  --gpu-full  Full CUDA pipeline - scale_cuda + overlay_cuda + NVENC
+              Offloads all processing to GPU, minimal CPU usage
+              Requires NVIDIA GPU with CUDA support
 
 SHADERS:
   vignette    Darkens edges of the frame
@@ -95,6 +102,9 @@ EXAMPLES:
 
   # Fast encoding for preview
   video-collage generate --preset ultrafast -o preview.mp4
+
+  # Full GPU acceleration (RTX 3050, etc.)
+  video-collage generate --gpu-full
 
   # Apply shader effect
   video-collage generate --shader vignette
@@ -152,6 +162,7 @@ async function runGenerate(args: string[]) {
       shader: { type: "string", short: "s" },
       preset: { type: "string", short: "p", default: "balanced" },
       gpu: { type: "boolean" },
+      "gpu-full": { type: "boolean" },
       init: { type: "boolean" },
       help: { type: "boolean" },
     },
@@ -241,6 +252,7 @@ async function runGenerate(args: string[]) {
       shader: values.shader,
       preset: values.preset as EncodingPreset,
       gpu: values.gpu || false,
+      gpuFull: values["gpu-full"] || false,
       layout: {
         type: layoutType,
         columns: values.columns ? parseInt(values.columns, 10) : undefined,
